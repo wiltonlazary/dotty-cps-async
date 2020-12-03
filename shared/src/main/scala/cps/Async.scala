@@ -158,6 +158,10 @@ object Async {
                    SuperTransform(cpsCtx).run(superTerm)
                 case returnTerm@Return(expr)=>
                    ReturnTransform(cpsCtx).run(returnTerm)
+                case constTerm@Literal(_)=>  // looks like Const on expressions not handel all cases.
+                   ConstTransform(cpsCtx)
+                case repeatedTerm@Repeated(elems, tpt) =>  
+                   RepeatedTransform(cpsCtx).run(repeatedTerm)
                 case _ =>
                    printf("fTree:"+fTree)
                    throw MacroError(s"language construction is not supported: ${fTree}", f)
