@@ -1,7 +1,8 @@
 Monads interoperability.
 ========================
 
-Monads in async and await can be different:  ``await[F]`` can be applied inside ``async[G]``  when exists ``CpsMonadConversion[F, G]`` (see `CpsMonadConversion.scala <https://github.com/rssh/dotty-cps-async/blob/master/shared/src/main/scala/cps/CpsMonadConversion.scala>`_ ).
+Monads in async and await can be different:  ``await[F]`` can be applied inside ``async[G]``  when exists 
+`CpsMonadConversion[F, G] <https://github.com/rssh/dotty-cps-async/blob/master/shared/src/main/scala/cps/CpsMonadConversion.scala>`_.
 
 Future Examples
 ---------------
@@ -9,17 +10,16 @@ Future Examples
 ``async[F]{ await[Future](.. ) }``
 ..................................
 
-Here is an example of implementation of ``CpsMonadConversion`` from ``Future`` to any async monad ``G[_]`` :
+Here is an example of implementation of ``Conversion`` from ``Future`` to any async monad ``G[_]`` :
 
 
 .. code-block:: scala
 
- given fromFutureConversion[G[_]](using ExecutionContext, CpsAsyncMonad[G]) as CpsMonadConversion[Future,G] =
-   new CpsMonadConversion[Future, G] {
-     override def apply[T](mf: CpsMonad[Future], mg: CpsMonad[G], ft:Future[T]): G[T] =
+ given fromFutureConversion[G[_]](using ExecutionContext, CpsAsyncMonad[G]): 
+                                                  CpsMonadConversion[Future,G] with
+     def apply[T](ft:Future[T]): G[T] =
            summon[CpsAsyncMonad[G]].adoptCallbackStyle(
                                          listener => ft.onComplete(listener) )
-   }
 
 
 Here 'async monad' for ``G[_]`` means that it is possible to receive ``G[T]`` from a callback, which returns ``T``.
@@ -27,7 +27,7 @@ Here 'async monad' for ``G[_]`` means that it is possible to receive ``G[T]`` fr
 
 .. code-block:: scala
 
- trait CpsAsyncMonad[F[_]] extends CpsTryMonad[F] {
+ trait CpsAsyncMonad[F[?]] extends CpsTryMonad[F] {
 
    /**
     * called by the source, which accept callback.
@@ -60,7 +60,7 @@ And how about inserting ``await[F]`` into  ``async[Future]`` ?.
 
 .. code-block:: scala
 
- trait CpsSchedulingMonad[F[_]] extends CpsAsyncMonad[F] {
+ trait CpsSchedulingMonad[F[?]] extends CpsAsyncMonad[F] {
 
    /**
     * schedule execution of op somewhere.
@@ -78,5 +78,31 @@ at the end of the world.
 You can read implementation of conversion of scheduled monad to ``Future`` in  `FutureAsyncMonad.scala <https://github.com/rssh/dotty-cps-async/blob/master/shared/src/main/scala/cps/FutureAsyncMonad.scala>`_ 
 
 Of course, it is is possible to create other conversions between you monads, based on other principles.
+
+js.Promise
+-----------
+
+Not only monads can be subject to await. For example, it is impossible to attach monad structure to ``js.Promise`` in scalajs, 
+because map operation is unimplementable: all ``Promise`` operation flatten their arguments.  But we can await ``Promise`` from scala
+``async[Future]`` blocks, because ``CpsMonadConversion[Future,Promise]`` is defined.
+
+Also, for fluent implementation of JS facades, dotty-cps-async provides ``JSFuture`` trait, which has monadic operations in scala and visible from JavaScript as ``Promise``.  
+i.e. with the following definitions:
+
+.. code-block:: scala
+
+ import cps.monads.jsfuture.{given,*}
+
+ @JSExportTopLevel("FromScalaExample")
+ object FromScalaExample:
+
+   @JSExport
+   def myFunction(x: String): JSFuture[String] = async[JSFuture] {
+       .... // can use await from futures and promises
+   }
+
+
+``FromScalaExampl.myFunction("string")``  can be used as ``Promise`` on javascript side.
+
 
 

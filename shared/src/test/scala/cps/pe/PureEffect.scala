@@ -71,9 +71,11 @@ case class MappedThunk[A,B](fa: PureEffect[A], f: Try[A] => Try[B]) extends Pure
 case class FlatMappedThunk[A,B](fa: PureEffect[A], f: Try[A] => PureEffect[B]) extends PureEffect[B]
 
 
-given PureEffectCpsMonad: CpsAsyncMonad[PureEffect] with
+given PureEffectCpsMonad: CpsConcurrentEffectMonad[PureEffect] with
 
   type F[T] = PureEffect[T]
+
+  type Spawned[A] = Future[A]
 
   def pure[A](x:A): PureEffect[A] = PureEffect.pure(x)
 
@@ -96,13 +98,23 @@ given PureEffectCpsMonad: CpsAsyncMonad[PureEffect] with
        }
        FutureThunk(()=>p.future)
 
+  def spawnEffect[A](op: =>PureEffect[A]): PureEffect[Spawned[A]] =
+       FutureThunk{() =>
+          given ExecutionContext = ExecutionContext.global
+          Future(
+            PureEffect.unsafeRunFuture(op)
+          )
+       }
+
+  def join[A](op: Spawned[A]): PureEffect[A] =
+       op.value match
+         case Some(r) => TryThunk(()=>r)
+         case None => FutureThunk(()=>op)
+
+  def tryCancel[A](op: Spawned[A]): F[Unit] =
+       error(new UnsupportedOperationException("PureEffect.cancel"))
 
 
-given ComputationBoundIsPossible: automaticColoring.IsPossible[PureEffect] with {}
-
-
-inline transparent given automaticColoring.ResolveMonadMemoizationKind[PureEffect] =
-                           cps.automaticColoring.ResolveMonadMemoizationKind(automaticColoring.MonadMemoizationKind.PURE)
 
 given CpsMonadPureMemoization[PureEffect] with
 

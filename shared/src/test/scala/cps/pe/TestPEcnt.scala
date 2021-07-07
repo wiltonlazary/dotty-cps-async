@@ -20,16 +20,16 @@ class TestPECnt:
   val LOG_TRESHOLD = 100
   
   
-  implicit val printCode: cps.macroFlags.PrintCode.type = cps.macroFlags.PrintCode
+  //implicit val printCode: cps.macroFlags.PrintCode.type = cps.macroFlags.PrintCode
   //implicit val printTree = cps.macroFlags.PrintTree
-  implicit inline def debugLevel: cps.macroFlags.DebugLevel = cps.macroFlags.DebugLevel(10)
+  //implicit inline def debugLevel: cps.macroFlags.DebugLevel = cps.macroFlags.DebugLevel(10)
 
 
   def cntAutomaticColoring(counter: PEIntRef): PureEffect[PEToyLogger] = async[PureEffect]{
     val log = PEToyLogger.make()
     val value = counter.increment()
     if value % LOG_MOD == 0 then
-       log.log(s"counter value = ${value}")
+       log.log(s"counter value = ${await(value)}")
     if (value - 1 == LOG_TRESHOLD) then  
        // Conversion will not be appliyed for == . For this example we want automatic conversion, so -1
        log.log("counter TRESHOLD")
@@ -37,7 +37,7 @@ class TestPECnt:
   }
 
 
-  @Test def peCnt_automatic_coloring(): Unit = 
+  @Test def peCnt_automatic_coloring9(): Unit = 
      val counter = new PEIntRef(9)
      val c = cntAutomaticColoring(counter)
      val future = c.unsafeRunFuture().map{ log =>
@@ -46,5 +46,16 @@ class TestPECnt:
        assert(counter.__get() == 10)
      }
      FutureCompleter(future)
+
+
+  @Test def peCnt_automatic_coloring10(): Unit = 
+     val counter = new PEIntRef(10)
+     val c = cntAutomaticColoring(counter)
+     val future = c.unsafeRunFuture().map{ log =>
+       assert(log.__all().size == 0)
+       assert(counter.__get() == 11)
+     }
+     FutureCompleter(future)
+
 
 
