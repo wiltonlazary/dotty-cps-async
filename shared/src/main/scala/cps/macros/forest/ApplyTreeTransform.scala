@@ -261,32 +261,23 @@ trait ApplyTreeTransform[F[_],CT]:
             cpsCtx.log(s" tails=${tails}")
             cpsCtx.log(s" unpure=${unpure}")
 
-        def isExistsAsyncArg(argRecords:Seq[ApplyArgRecord]): Boolean =
-             argRecords.exists(_.isAsync)
-
-        def isExistsPrependArg(argRecords:Seq[ApplyArgRecord], existsAsync: Boolean): Boolean =
-             argRecords.exists(_.usePrepend(existsAsync))
-
-        def isExistsShiftedLambda(argRecords:Seq[ApplyArgRecord]): Boolean =
-             argRecords.exists(_.hasShiftedLambda)
-
 
         val paramsDescriptor = MethodParamsDescriptor(fun)
 
         val applyRecords = O.buildApplyArgsRecords(paramsDescriptor, args, cpsCtx)
-        val existsAsyncArg = isExistsAsyncArg(applyRecords) || tails.exists(isExistsAsyncArg)
-        val existsPrependArg = isExistsPrependArg(applyRecords, existsAsyncArg) ||
-                                                         tails.exists(isExistsPrependArg(_, existsAsyncArg))
-        val existsShiftedLambda = isExistsShiftedLambda(applyRecords) || tails.exists(isExistsShiftedLambda)
+
+        val argsProperties = ApplyArgsSummaryProperties.mergeSeqSeq(applyRecords::tails)
+
+        val existsAsyncArg = argsProperties.hasAsync
+        val existsPrependArg = argsProperties.usePrepend
+        val existsShiftedLambda = argsProperties.hasShiftedLambda
+        val shouldBeChangedSync = argsProperties.shouldBeChangedSync
         if cpsCtx.flags.debugLevel >= 15 then
             cpsCtx.log(s" existsShiftedLambda=${existsShiftedLambda}")
-            cpsCtx.log(s" tails.existsShiftedLambda=${tails.exists(isExistsShiftedLambda)}")
             cpsCtx.log(s" existsAsyncArg=${existsAsyncArg}")
-            cpsCtx.log(s" tails.existsAsyncArg=${tails.exists(isExistsAsyncArg)}")
             cpsCtx.log(s" existsPrependArg=${existsPrependArg}")
-            cpsCtx.log(s" tails.existsPrependArg=${tails.exists(isExistsPrependArg(_, existsAsyncArg))}")
 
-        if (!existsAsyncArg && !existsShiftedLambda) {
+        if (!existsAsyncArg && !existsShiftedLambda && !shouldBeChangedSync) {
            val tailArgss = tails.map(_.map(_.term).toList)
            cpsFun match
               case lt: AsyncLambdaCpsTree =>
@@ -308,12 +299,13 @@ trait ApplyTreeTransform[F[_],CT]:
            var runFold = true
            val lastCpsTree: CpsTree = if (!existsPrependArg && cpsFun.isSync) {
                                     runFold = false
-                                    if (!existsShiftedLambda && !cpsFun.isChanged && !unpure)
+                                    if (!existsShiftedLambda && !cpsFun.isChanged && 
+                                        !unpure && !shouldBeChangedSync)
                                        CpsTree.pure(applyTerm)
                                     else
-                                       buildApply(cpsFun, fun, applyRecords, applyTerm, existsAsyncArg, existsShiftedLambda, unpure, tails)
+                                       buildApply(cpsFun, fun, applyRecords, applyTerm, argsProperties, unpure, tails)
                                  } else {
-                                    buildApply(cpsFun, fun, applyRecords, applyTerm, existsAsyncArg, existsShiftedLambda, unpure, tails)
+                                    buildApply(cpsFun, fun, applyRecords, applyTerm, argsProperties, unpure, tails)
                                  }
            if cpsCtx.flags.debugLevel >= 15 then
                cpsCtx.log(s"handleArgs: runFold=$runFold")
@@ -555,21 +547,7 @@ trait ApplyTreeTransform[F[_],CT]:
         cpsCtx.log(s"shiftCaller, t=$term")
     term match
        case TypeApply(s@Select(qual,name),targs) =>
-                  if (qual.tpe =:= monad.tpe)
-                    if (s.symbol == mapSymbol || s.symbol == flatMapSymbol)
-                      // TODO: add more symbols
-                      val (searchResult, shiftTp) = findAsyncShiftTerm(qual)
-                      searchResult match
-                        case shiftQual:ImplicitSearchSuccess =>
-                          val newSelect = Select.unique(shiftQual.tree,s.name)
-                          Apply(TypeApply(newSelect, targs).appliedTo(qual),shiftedArgs)
-                        case failure:ImplicitSearchFailure =>
-                          throw new MacroError(s"Can't find asyn shift for cpsMonad: ${failure.explanation}", posExpr(term))
-                    else
-                      //throw new MacroError("Unimplemented shift for CpsMonad", posExpr(term))
-                      shiftSelectTypeApplyApply(s, targs, shiftedArgs)
-                  else 
-                    shiftSelectTypeApplyApply(s, targs, shiftedArgs)
+                  shiftSelectTypeApplyApply(s, targs, shiftedArgs)
        case s@Select(qual,name) =>
                     shiftSelectTypeApplyApply(s, Nil, shiftedArgs)
        //case TypeApply(x, targs) =>  // now scala hvw no multiple type params
@@ -596,16 +574,16 @@ trait ApplyTreeTransform[F[_],CT]:
   def buildApply(cpsFun: CpsTree, fun: Term,
                  argRecords: Seq[ApplyArgRecord],
                  applyTerm: Term,
-                 withAsync: Boolean,
-                 withShiftedLambda: Boolean,
+                 argsProperties: ApplyArgsSummaryProperties,
                  inShiftedCallChain: Boolean,
                  tails: List[Seq[ApplyArgRecord]]
                  ): CpsTree =
         if (cpsCtx.flags.debugLevel >= 15)
             cpsCtx.log(s"buildApply: fun=${safeShow(fun)}")
-            cpsCtx.log(s"buildApply: cpsFun.isSync=${cpsFun.isSync}, withShiftedLambda=${withShiftedLambda}, inShiftedCallChain=${inShiftedCallChain}")
+            cpsCtx.log(s"buildApply: cpsFun.isSync=${cpsFun.isSync}, withShiftedLambda=${argsProperties.hasShiftedLambda}, inShiftedCallChain=${inShiftedCallChain}")
+        val withAsync = argsProperties.hasAsync
         val applyTpe = applyTerm.tpe
-        if (withShiftedLambda)
+        if (argsProperties.hasShiftedLambda)
           buildShiftedApply(cpsFun, fun, argRecords, withAsync, tails, applyTerm)
         else
           val args = argRecords.map(_.identArg(withAsync)).toList
@@ -623,7 +601,7 @@ trait ApplyTreeTransform[F[_],CT]:
                           if (inShiftedCallChain)
                              shiftedResultCpsTree(applyTerm, applied)
                           else
-                             CpsTree.pure(applied, cpsFun.isChanged)
+                             CpsTree.pure(applied, isChanged=true)
                        case None =>
                           if (inShiftedCallChain)
                              val shifted = cpsFun.transformed

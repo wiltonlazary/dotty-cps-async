@@ -1,3 +1,8 @@
+/*
+ * dotty-cps-async: https://github.com/rssh/dotty-cps-async
+ *
+ * (C) Ruslan Shevchenko <ruslan@shevchenko.kiev.ua>, Kyiv, 2020, 2021
+ */
 package cps
 
 import scala.quoted._
@@ -93,24 +98,18 @@ trait CpsTryMonad[F[_]] extends CpsMonad[F] {
     * ensure that `action` will run before getting value from `fa`
     **/
    def withAction[A](fa:F[A])(action: =>Unit):F[A] =
-    flatMap(
-       restore(fa){ ex =>
-         try {
-           action
-           error(ex)
-         }catch{
-           case ex1: Throwable => ex.addSuppressed(ex1)
-             error(ex)
-         }
-       }
-      ){x =>
-        try{
-          action
-          pure(x)
-        }catch{
-          case NonFatal(ex) => error(ex)
-        }
-      }
+    flatMapTry(fa){ r =>
+       try
+         action
+         fromTry(r)
+       catch
+         case NonFatal(ex) =>
+           r match
+             case Success(_) => error(ex)
+             case Failure(mEx) => mEx.addSuppressed(ex)
+                                error(mEx)
+    }
+
 
    /**
     * async shift of `withAction`. 
@@ -124,17 +123,27 @@ trait CpsTryMonad[F[_]] extends CpsMonad[F] {
     * return result of `fa` after completition of `action`.
     **/
    def withAsyncAction[A](fa:F[A])(action: => F[Unit]):F[A] =
-    flatMap(
-       restore(fa){ ex =>
-         flatMap(
-           restore(tryImpure(action)){
-             ex1 => ex.addSuppressed(ex1)
-             error(ex)
-           })(_ => error(ex))
-       }
-    ){ x =>
-        map(tryImpure(action))(_ => x)
+    flatMapTry(fa){ ra =>
+       try
+         flatMapTry(action){ raa =>
+           raa match
+             case Success(_) => fromTry(ra)
+             case Failure(raaex) =>
+                   ra match
+                     case Success(rav) => error(raaex)
+                     case Failure(raex) =>
+                            raex.addSuppressed(raaex)
+                            error(raex)
+         }
+       catch
+         case NonFatal(ex) =>
+           ra match
+             case Success(_) => error(ex)
+             case Failure(raex) =>
+                   raex.addSuppressed(ex)
+                   error(raex)
     }
+  
 
    /**
     * try to evaluate synchonious operation and wrap successful or failed result into `F`.
@@ -330,20 +339,4 @@ trait CpsSchedulingMonad[F[_]] extends CpsConcurrentMonad[F] {
          
 
 }
-
-
-
-object CpsMonad:
-
-  object ForSyntax:
-
-    extension [F[_],T,S](x:F[T])(using m:CpsMonad[F])
-
-      def flatMap(f: T=>F[S]): F[S] =
-         m.flatMap(x)(f)
-
-      def map(f: T=>S): F[S] =
-         m.map(x)(f)
-
-
 

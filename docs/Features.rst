@@ -5,7 +5,8 @@ Automatic Coloring
 ------------------
 
 
-Sometimes, especially when we work with distributes systems, most of our API call are asynchronous, and near each API call should be prefixed y await.  And we should remember what functions we should call as async and what - not.  It is known as 'async coloring problem': i.e. we should split our code technically into two parts (colors):  one works with async expressions (i.e.,, F[T]) and one - sync. (T without F).
+Sometimes, especially when we work with distributes systems, most of our API call are asynchronous and should be prefixed by `await`.  And we should remember what functions we should call as async and what - not.  It is known as 'async coloring problem': i.e. we should split our code technically into two parts (colors):  one works with async expressions (i.e.,, F[T]) and one - sync. (T without F).
+
 If we want to put asynchronous expression into synchronous function, we should write `await(expr)`  instead `expr`,  for transforming synchronous code into asynchronous.
 (see http://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/ for more detailed explanation )
 
@@ -39,7 +40,7 @@ Can be written without await as:
      }
 
 
-If the underlying monad supports execution caching for using this feature (i.e., two awaits on the same expression should not cause reevaluation) then implicit await is enough for automatic coloring.  But what to do with pure effect monads, which holds computations without starting them?
+If the underlying monad supports execution caching for using this feature (i.e., two awaits on the same expression should not cause reevaluation), then implicit await is enough for automatic coloring.  But what to do with pure effect monads, which holds computations without starting them?
 
 Let's look on the next code:
 
@@ -85,7 +86,6 @@ If we want to provide support for automatic coloring for your monad, you should 
 Note, that automatic coloring for monads wich is not memoized by default (i.e. all effect monads) is hightly experimental and
  likely will be changed in future.
 
-From 0.9.0:
 
 Coloring rules are following:
 
@@ -168,6 +168,28 @@ Without custom value discarding, the log statement will be dropped.  (Type of `i
 Dotty-cps-async provides special `AwaitValueDiscard <https://github.com/rssh/dotty-cps-async/blob/master/shared/src/main/scala/cps/ValueDiscard.scala#L27>`_  which force monad to be evaluated before be discarded.  We recommend use this discard as default for IO[Unit].
 
 
+Short syntax for await
+----------------------
+
+It can be helpful when monad or environment does not support automatic coloring, but the default `await` syntax is too heavy.  For this case, we define `unary_!` operator for use instead of `await`. 
+
+Example:
+
+.. code-block:: scala
+
+    import cps.syntax.`unary_!`
+
+    val x = username + !fetchToken(data)
+
+
+Inside the async block this will be a synonim for
+
+.. code-block:: scala
+
+    val x = username + await(fetchToken(data))
+
+
+
 
 
 SIP22-compatible interface
@@ -198,7 +220,7 @@ It is also possible to compile sip22 async code without changing of the source c
 
 .. code-block:: scala
 
- libraryDependencies += "com.github.rssh" %% "shim-scala-async-dotty-cps-async" % "0.8.1",
+ libraryDependencies += "com.github.rssh" %% "shim-scala-async-dotty-cps-async" % "0.9.2",
 
 
 Note that compatibility was not a primary goal during the development of dotty-cps-async. Generated code is quite different, so if you need a bug-to-bug compatible version of scala2 async, you should use the port of the original -XAsync compiler plugin.

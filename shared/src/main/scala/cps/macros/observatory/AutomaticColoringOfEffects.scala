@@ -13,7 +13,7 @@ trait AutomaticColoringOfEffectsQuoteScope:
   import quotes.reflect.*
 
   case class ValUsage(
-             var definedInside: Boolean = false,
+             var optValDef: Option[ValDef] = None,
              val inAwaits: ArrayBuffer[Tree] = ArrayBuffer(),
              val withoutAwaits: ArrayBuffer[Tree] = ArrayBuffer(),
              val aliases: ArrayBuffer[ValUsage] = ArrayBuffer()
@@ -27,6 +27,8 @@ trait AutomaticColoringOfEffectsQuoteScope:
                  
      def allWithoutAwaits: Seq[Tree] = 
        (Seq.empty ++ withoutAwaits.toSeq ++  aliases.toSeq.flatMap(_.allWithoutAwaits) )
+
+     def definedInside: Boolean = !optValDef.isEmpty
 
      def reportCases():Unit =
        val firstWithout = allWithoutAwaits.headOption
@@ -50,19 +52,14 @@ trait AutomaticColoringOfEffectsQuoteScope:
     override def visitStart[F[_]:Type](tree: Tree, ctx: ObservationContext[F])(owner: Symbol): Unit =
       tree match
         case v@ValDef(name, vtt, Some(rhs)) =>
-            val vType = TransformUtil.veryWiden(rhs.tpe).asType   
-            vType match
-               case '[F[r]] =>
-                 val usageRecord = usageRecords.getOrUpdate(v.symbol, ValUsage())
-                 usageRecord.definedInside = true
-                 rhs match
-                   case idRhs@Ident(_) =>
-                     val parentUsageRecord = usageRecords.getOrUpdate(idRhs.symbol, ValUsage()) 
-                     parentUsageRecord.aliases.addOne(usageRecord)
-                     // not count await/not await in aliases.
-                   case _ =>
-                     ctx.scheduleVisit(rhs, this)(owner)
-               case _ =>
+            val usageRecord = usageRecords.getOrUpdate(v.symbol, ValUsage())
+            usageRecord.optValDef = Some(v)
+            rhs match
+              case idRhs@Ident(_) =>
+                 val parentUsageRecord = usageRecords.getOrUpdate(idRhs.symbol, ValUsage()) 
+                 parentUsageRecord.aliases.addOne(usageRecord)
+                 // not count await/not await in aliases.
+              case _ =>
                  ctx.scheduleVisit(rhs, this)(owner)
         case term@Apply(fun, args) => 
                  // to have the same structure as forest/ApplyTransform for the same patterns
@@ -145,6 +142,11 @@ trait AutomaticColoringOfEffectsQuoteScope:
                   for(a <- allInAwaits) {
                      report.info("await: ", a.pos)
                   }
+            else if (usageRecord.definedInside && usageRecord.aliases.isEmpty
+                      && usageRecord.inAwaits.isEmpty && usageRecord.withoutAwaits.isEmpty) then
+                  val valDef = usageRecord.optValDef.get
+                  report.warning("unused variable creation, effect may be lost", usageRecord.optValDef.get.pos)
+     
         }
      
 
