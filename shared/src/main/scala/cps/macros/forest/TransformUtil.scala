@@ -10,7 +10,7 @@ import cps.macros.misc._
 object TransformUtil:
 
 
-  def find(using Quotes)(term: quotes.reflect.Term,
+  def find(using Quotes)(term: quotes.reflect.Tree,
                        cond: quotes.reflect.Tree=> Option[quotes.reflect.Tree]) :Option[quotes.reflect.Tree] = {
      import quotes.reflect._
      import util._
@@ -119,8 +119,11 @@ object TransformUtil:
                  case tp@TypeRef(internal, name) =>
                          internal match
                            case tr: TermRef =>
-                              val ref = lookupParamTerm(tr.termSymbol).getOrElse(Ref(tr.termSymbol))
-                              TypeSelect(ref,name).tpe
+                              lookupParamTerm(tr.termSymbol) match
+                                case Some(paramTerm) =>
+                                  TypeSelect(paramTerm, name).tpe
+                                case None =>
+                                  tp
                            case _ =>
                             // we can't get inside, since it is
                             tp
@@ -177,12 +180,37 @@ object TransformUtil:
       case ex: Exception =>
          t.toString
 
+
+  def findOtherOwnersIn(using Quotes)(tree: quotes.reflect.Tree): Map[Int,quotes.reflect.Tree] =
+      import quotes.reflect._
+      import util._
+      val search = new TreeAccumulator[Map[Int, Tree]] {
+
+        def foldTree(x: Map[Int,Tree], tree: Tree)(owner: Symbol): Map[Int,Tree] =
+                 foldOverTree(x,tree)(owner)
+
+        override def foldOverTree(x: Map[Int,Tree], tree: Tree)(owner: Symbol): Map[Int,Tree] = {
+           tree match
+            case t:Definition =>
+              val maybeOwner = t.symbol.maybeOwner
+              if (maybeOwner != Symbol.noSymbol && maybeOwner != owner) {
+                 x.get(maybeOwner.hashCode) match
+                  case Some(other) => x
+                  case None => x.updated(maybeOwner.hashCode, t)
+              } else 
+                x
+            case _ =>
+              super.foldOverTree(x,tree)(owner)
+        }
+      }
+      search.foldTree(Map.empty,tree)(Symbol.spliceOwner)
+
+
   // used for debugging instrumentation
   def dummyMapper(using Quotes)(t: quotes.reflect.Term, owner: quotes.reflect.Symbol): Boolean =
      import quotes.reflect._
      var wasError = false
      val checker = new TreeMap() {
-
 
          override def transformTerm(tree: Term)(owner: Symbol): Term =
             try {
@@ -198,5 +226,23 @@ object TransformUtil:
      } 
      checker.transformTerm(t)(owner)
      wasError
+
+  // workarround on bug, when changeowner does not change owner of definition, if this definietion
+  //   is not inside some otjer tree.   
+  def reallyChangeOwner(using Quotes)(tree: quotes.reflect.Tree, owner: quotes.reflect.Symbol): quotes.reflect.Tree =
+    import quotes.reflect.*
+    tree match
+      case td: Definition =>
+        if (td.symbol.maybeOwner != Symbol.noSymbol && td.symbol.maybeOwner != owner) then
+          val tmpBlock = Block(td::Nil, '{}.asTerm)
+          tmpBlock.changeOwner(owner) match
+            case Block(x::Nil, other) => x
+            case _ =>
+              throw MacroError(s"imposible: changeOwner changed structure of block ${tmpBlock}", tmpBlock.asExpr)
+        else
+          td
+      case other =>
+        other.changeOwner(owner)
+
      
 

@@ -8,7 +8,7 @@ import cps._
 import cps.macros._
 
 
-class NewTransform[F[_]:Type,T:Type](cpsCtx: TransformationContext[F,T]):
+class NewTransform[F[_]:Type,T:Type,C<:CpsMonadContext[F]:Type](cpsCtx: TransformationContext[F,T,C]):
 
   import cpsCtx._
 

@@ -21,6 +21,8 @@ trait CpsMonad[F[_]] extends CpsAwaitable[F] {
 
    type WF[X] = F[X]
 
+   type Context <: CpsMonadContext[F]
+  
    /**
     * Pure - wrap value `t` inside monad. 
     *
@@ -37,6 +39,18 @@ trait CpsMonad[F[_]] extends CpsAwaitable[F] {
     * bind combinator, which compose `f` over `fa` 
     **/
    def flatMap[A,B](fa:F[A])(f: A=>F[B]):F[B]
+
+   /**
+    * run op in the context environment.
+    **/
+   def apply[T](op: Context => F[T]): F[T] 
+
+
+}
+
+object CpsMonad {
+
+  type Aux[F[_],C<:CpsMonadContext[F]] = CpsMonad[F] { type Context = C }
 
 }
 
@@ -92,7 +106,7 @@ trait CpsTryMonad[F[_]] extends CpsMonad[F] {
                                   case NonFatal(ex) => error(ex)
                                 }
          }
-
+    
 
    /**
     * ensure that `action` will run before getting value from `fa`
@@ -177,11 +191,20 @@ trait CpsTryMonad[F[_]] extends CpsMonad[F] {
          case NonFatal(ex) => error(ex)
        }
 
-
+   /**
+    * transform `r` into pure value or error.
+    **/
    def fromTry[A](r: Try[A]): F[A] =
        r match
          case Success(a) => pure(a)
          case Failure(ex) => error(ex)
+
+}
+
+
+object CpsTryMonad {
+
+  type Aux[F[_],C<:CpsMonadContext[F]] = CpsTryMonad[F] { type Context = C }
 
 }
 
@@ -197,14 +220,21 @@ trait CpsTryMonad[F[_]] extends CpsMonad[F] {
  **/
 trait CpsAsyncMonad[F[_]] extends CpsTryMonad[F] {
 
-   /**
-    * called by the source, which accept callback.
-    * source is called immediately in adoptCallbackStyle
-    **/
-   def adoptCallbackStyle[A](source: (Try[A]=>Unit) => Unit): F[A]
+   //override type Context <: CpsAsyncMonadContext[F]
 
+   /**
+    * called by the source, which accept callback inside 
+    **/
+   def adoptCallbackStyle[A](source: (Try[A]=>Unit) => Unit): F[A] 
  
 }
+
+object CpsAsyncMonad {
+
+  type Aux[F[_],C<:CpsMonadContext[F]] = CpsAsyncMonad[F] { type Context = C }
+
+}
+
 
 /**
  * Marker trait, which mark effect monad, where
@@ -230,7 +260,7 @@ trait CpsEffectMonad[F[_]] extends CpsMonad[F] {
     * representing pure as eager function is a simplification of semantics,
     * real binding to monads in math sence, should be with `delay` instead `pure`
     **/
-   def delay[T](x: =>T):F[T] = map(delayedUnit)(_ => x)
+   def delay[T](x: => T):F[T] = map(delayedUnit)(_ => x)
 
    /**
     * shortcat for delayed evaluation of effect.
@@ -238,6 +268,8 @@ trait CpsEffectMonad[F[_]] extends CpsMonad[F] {
    def flatDelay[T](x: => F[T]):F[T] = flatMap(delayedUnit)(_ => x)
 
 }
+
+
 
 /**
  * Async Effect Monad
@@ -282,28 +314,39 @@ trait CpsConcurrentMonad[F[_]] extends CpsAsyncMonad[F]  {
        flatMap(spawnEffect(fa)){ sa =>
          flatMap(spawnEffect(fb)){ sb =>
             val ref = new AtomicReference[Either[(Try[A],Spawned[B]),(Spawned[A],Try[B])]|Null](null)
-            val endA = adoptCallbackStyle[Either[(Try[A],Spawned[B]),(Spawned[A],Try[B])]]{ callback => 
-              mapTry(join(sa)){ ra => 
+            //apply{ ctx =>
+              val endA = adoptCallbackStyle[Either[(Try[A],Spawned[B]),(Spawned[A],Try[B])]]{ callback => 
+                mapTry(join(sa)){ ra => 
                  val v = Left(ra,sb)
                  if ref.compareAndSet(null,v) then 
                     callback(Success(v)) 
-              }
-              mapTry(join(sb)){ rb =>
+                }
+                mapTry(join(sb)){ rb =>
                  val v = Right(sa, rb)
                  if ref.compareAndSet(null,v) then 
                     callback(Success(v)) 
-              }
-            }
-            endA
+                }
+              }//(using ctx)
+              endA
+            //}
          }
        }
 
 }
 
+
+object CpsConcurrentMonad {
+
+  type Aux[F[_],C<:CpsMonadContext[F]] = CpsConcurrentMonad[F] { type Context = C }
+
+}
+
+
 /**
  * Marker trait for concurrent effect monads.
  */
-trait CpsConcurrentEffectMonad[F[_]] extends CpsConcurrentMonad[F] with CpsEffectMonad[F]
+trait CpsConcurrentEffectMonad[F[_]] extends CpsConcurrentMonad[F] with CpsAsyncEffectMonad[F]
+
 
 
 /**
@@ -327,16 +370,30 @@ trait CpsSchedulingMonad[F[_]] extends CpsConcurrentMonad[F] {
     * schedule execution of op somewhere, immediatly.
     * Note, that characteristics of scheduler can vary.
     **/
-   def spawn[A](op: =>F[A]): F[A]
+   def spawn[A](op: => F[A]): F[A]
 
+   /***
+    * In eager monad, spawned process can be represented by F[_]
+    **/
    type Spawned[A] = F[A]
 
-   def spawnEffect[A](op: =>F[A]): F[F[A]] =
+   /**
+    * representation of spawnEffect as immediate operation.
+    **/
+   def spawnEffect[A](op: => F[A]): F[F[A]] =
          pure(spawn(op))
 
+   /**
+    * join spawned immediate monad means to receive those spawing monad.
+    **/      
    def join[A](op: Spawned[A]): F[A] = op
 
          
+}
+
+object CpsSchedulingMonad {
+
+   type Aux[F[_], C <: CpsMonadContext[F]] = CpsSchedulingMonad[F] { type Context = C }
 
 }
 

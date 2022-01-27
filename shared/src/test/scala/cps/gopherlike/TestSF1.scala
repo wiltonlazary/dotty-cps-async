@@ -11,7 +11,7 @@ import cps._
 import cps.monads.FutureAsyncMonad
 import scala.concurrent.ExecutionContext.Implicits.global
 
-
+/*
 class TestSF1:
 
   def qqq: Int = 0
@@ -23,7 +23,7 @@ class TestSF1:
      async[Future] {
         val ch1 = new CIFChannel[Future,Int]()
         val ch2 = new CIFChannel[Future,Int]()
-        val select = SLSelectLoop[Future]
+        val select = SLSelectLoop.create[Future]
         //implicit val printCode = cps.macroFlags.PrintCode
         //implicit val debugLevel = cps.macroFlags.DebugLevel(20)
         for {
@@ -51,6 +51,7 @@ class TestSF1:
        
      }
   }
+*/
 
 
 // workarround for https://github.com/lampepfl/dotty/issues/11331

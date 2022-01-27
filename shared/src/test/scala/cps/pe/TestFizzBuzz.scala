@@ -6,7 +6,7 @@ import org.junit.Assert.*
 import scala.util.*
 
 import cps.*
-import cps.automaticColoring.{*,given}
+import cps.automaticColoring.given
 import cps.util.FutureCompleter
 import scala.language.implicitConversions
 
@@ -20,7 +20,7 @@ class TestFizzBuzz:
   //implicit inline def debugLevel: cps.macroFlags.DebugLevel = cps.macroFlags.DebugLevel(10)
 
 
-  @Test def testFizBuzz: Unit = 
+  @Test def testFizBuzz = 
      val c = async[PureEffect] {
        val logger = PEToyLogger.make()
        val counter = PEIntRef.make(-1)

@@ -1,10 +1,11 @@
 package cps.automaticColoring
 
-import cps._
+import cps.*
 
-transparent inline given conversion[F[_],T](using CpsAwaitable[F], CpsMonadMemoization[F], AutomaticColoringTag[F]): Conversion[F[T],T] =
-           x => await[F,T](x)
+/**
+ * implicit conversion which inserted during autmatic coloring when async value used in sync context.
+ **/
+transparent inline given conversion[F[_],T,G[_]](using CpsAwaitable[F], CpsMonadMemoization[F], AutomaticColoringTag[F], CpsMonadContext[G]): Conversion[F[T],T] =
+           x => await[F,T,G](x)
 
-//transparent inline given conversion[F[_],T](using CpsMonad[F]): Conversion[F[T],T] =
-//           x => await(x)
 

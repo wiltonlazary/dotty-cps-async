@@ -10,8 +10,8 @@ import cps.macros.misc._
 object ValDefTransform:
 
 
-  def fromBlock[F[_]:Type](using Quotes)(
-                           cpsCtx: TransformationContext[F,Unit],
+  def fromBlock[F[_]:Type,C<:CpsMonadContext[F]:Type](using Quotes)(
+                           cpsCtx: TransformationContext[F,Unit,C],
                            valDef: quotes.reflect.ValDef): CpsExpr[F,Unit] = {
      import quotes.reflect._
      import cpsCtx._
@@ -28,7 +28,7 @@ object ValDefTransform:
             val cpsRight = Async.nestTransform(rhs.asExprOf[et],cpsCtx)
             val memCpsRight:CpsExpr[F,et] = if (cpsCtx.flags.automaticColoring 
                                               && cpsCtx.memoization.isDefined
-                                              && cpsCtx.memoization.get.kind != MonadMemoizationKind.BY_DEFAULT) {
+                                              && cpsCtx.memoization.get.kind != CpsMonadMemoization.Kind.BY_DEFAULT) {
                rhsType match
                  case '[F[r]] =>
                     val refinedCpsRight = cpsRight.asInstanceOf[CpsExpr[F,F[r]]]
@@ -45,25 +45,25 @@ object ValDefTransform:
                     if (toMemoize) then
                       val memoization = cpsCtx.memoization.get
                       memoization.kind match
-                        case MonadMemoizationKind.BY_DEFAULT => cpsRight
-                        case MonadMemoizationKind.INPLACE => 
-                           val mm = memoization.monadMemoization.asExprOf[CpsMonadInplaceMemoization[F]]
+                        case CpsMonadMemoization.Kind.BY_DEFAULT => cpsRight
+                        case CpsMonadMemoization.Kind.INPLACE => 
+                           val mm = memoization.monadMemoization.asExprOf[CpsMonadMemoization.Inplace[F]]
                            if (cpsRight.isAsync) then
                               refinedCpsRight.map( '{ (x:F[r]) => ${mm}.apply(x) } ).asInstanceOf[CpsExpr[F,et]]
                            else
                               val rhsExpr = cpsRight.syncOrigin.get
                               val nextRhs = '{ ${mm}.apply( ${rhsExpr.asExprOf[F[r]]} ) }
                               CpsExpr.sync(monad, nextRhs, changed=true).asInstanceOf[CpsExpr[F,et]]
-                        case MonadMemoizationKind.PURE => 
-                           val mm = memoization.monadMemoization.asExprOf[CpsMonadPureMemoization[F]]
+                        case CpsMonadMemoization.Kind.PURE => 
+                           val mm = memoization.monadMemoization.asExprOf[CpsMonadMemoization.Pure[F]]
                            if (cpsRight.isAsync) then
                               refinedCpsRight.flatMap( '{ (x:F[r]) => ${mm}.apply(x) } ).asInstanceOf[CpsExpr[F,et]]
                            else
                               val rhsExpr = cpsRight.syncOrigin.get
                               val nextRhs = '{ ${mm}.apply( ${rhsExpr.asExprOf[F[r]]} ) }
                               CpsExpr.async(monad, nextRhs.asExprOf[F[F[r]]]).asInstanceOf[CpsExpr[F,et]]
-                        case MonadMemoizationKind.DYNAMIC => 
-                           Expr.summon[CpsMonadDynamicMemoizationAp[F,r,et]] match
+                        case CpsMonadMemoization.Kind.DYNAMIC => 
+                           Expr.summon[CpsMonadMemoization.DynamicAp[F,r,et]] match
                                case Some(mm) => 
                                  if (cpsRight.isAsync) then
                                     refinedCpsRight.flatMap( '{ (x:F[r]) => ${mm}.apply(x.asInstanceOf[et]) } ).asInstanceOf[CpsExpr[F,et]]
@@ -74,7 +74,7 @@ object ValDefTransform:
                                case None =>
                                  // todo: use search instead summon for additional message in failure
                                  val msg = 
-                                   s"Can't find given instance of ${TypeRepr.of[CpsMonadDynamicMemoizationAp[F,r,et]].show}"
+                                   s"Can't find given instance of ${TypeRepr.of[CpsMonadMemoization.DynamicAp[F,r,et]].show}"
                                  throw MacroError(msg, rhs.asExpr)
                     else
                       cpsRight
@@ -113,21 +113,17 @@ object ValDefTransform:
 
        override def fLast(using Quotes) =
           import quotes.reflect._
-
-          def appendBlockExpr[A:quoted.Type](rhs: quotes.reflect.Term, expr: Expr[A]):Expr[A] =
-                buildAppendBlockExpr(oldValDef.asInstanceOf[quotes.reflect.ValDef],
-                                     rhs, expr)
-
+         
           next.syncOrigin match
             case Some(nextOrigin) =>
              '{
                ${monad}.map(${cpsRhs.transformed})((v:V) =>
-                          ${appendBlockExpr('v.asTerm, nextOrigin)})
+                          ${buildAppendBlockExpr('v, nextOrigin)})
               }
             case  None =>
              '{
                ${monad}.flatMap(${cpsRhs.transformed})((v:V)=>
-                          ${appendBlockExpr('v.asTerm, next.transformed)})
+                          ${buildAppendBlockExpr('v, next.transformed)})
              }
 
        override def prependExprs(exprs: Seq[ExprTreeGen]): CpsExpr[F,T] =
@@ -141,15 +137,15 @@ object ValDefTransform:
           RhsFlatMappedCpsExpr(using thisQuotes)(monad,prev,oldValDef,cpsRhs,next.append(e))
 
 
-       private def buildAppendBlock(using Quotes)(
-                      oldValDef: quotes.reflect.ValDef, rhs:quotes.reflect.Term,
-                                                    exprTerm:quotes.reflect.Term): quotes.reflect.Term =
+       private def buildAppendBlock(using Quotes)(rhs:quotes.reflect.Term,
+                                                  exprTerm:quotes.reflect.Term): quotes.reflect.Term =
        {
           import quotes.reflect._
           import scala.quoted.Expr
 
-          val valDef = ValDef(oldValDef.symbol, Some(rhs.changeOwner(oldValDef.symbol)))
-          exprTerm match 
+          val castedOldValDef = oldValDef.asInstanceOf[quotes.reflect.ValDef]
+          val valDef = ValDef(castedOldValDef.symbol, Some(rhs.changeOwner(castedOldValDef.symbol)))
+          exprTerm.changeOwner(castedOldValDef.symbol.owner) match 
               case Block(stats,last) =>
                     Block(valDef::stats, last)
               case other =>
@@ -157,9 +153,9 @@ object ValDefTransform:
 
        }
 
-       private def buildAppendBlockExpr[A:Type](using Quotes)(oldValDef: quotes.reflect.ValDef, rhs: quotes.reflect.Term, expr:Expr[A]):Expr[A] =
+       private def buildAppendBlockExpr[A:Type](using Quotes)(rhs: Expr[V], expr:Expr[A]):Expr[A] =
           import quotes.reflect._
-          buildAppendBlock(oldValDef,rhs,expr.asTerm).asExprOf[A]
+          buildAppendBlock(rhs.asTerm,expr.asTerm).asExprOf[A]
 
   }
 
@@ -174,9 +170,9 @@ object ValDefTransform:
 
        override def syncOrigin(using Quotes): Option[Expr[T]] = next.syncOrigin.map{ n =>
          import quotes.reflect._
-         val prevStats: List[Statement] = prev.map(_.extract).toList
          val valDef: Statement = oldValDef.asInstanceOf[quotes.reflect.ValDef]
-         val outputTerm = n.asTerm match
+         val prevStats: List[Statement] = prev.map(_.extract.changeOwner(valDef.symbol.owner)).toList
+         val outputTerm = n.asTerm.changeOwner(valDef.symbol.owner) match
             case Block(statements, last) =>
                    Block( prevStats ++: (valDef +: statements), last)
             case other =>
@@ -191,11 +187,11 @@ object ValDefTransform:
           import quotes.reflect._
 
           val valDef = oldValDef.asInstanceOf[quotes.reflect.ValDef]
-          val block = next.transformed.asTerm match 
+          val block = next.transformed.asTerm.changeOwner(valDef.symbol.owner) match 
              case Block(stats, e) =>
-                 Block( prev.map(_.extract) ++: valDef +: stats, e)
+                 Block( prev.map(_.extract.changeOwner(valDef.symbol.owner)) ++: valDef +: stats, e)
              case other =>
-                 Block( prev.map(_.extract) ++: List(valDef) , other)
+                 Block( prev.map(_.extract.changeOwner(valDef.symbol.owner)) ++: List(valDef) , other)
           block.asExprOf[F[T]]
 
        }
@@ -217,11 +213,12 @@ object ValDefTransform:
           if (prev.isEmpty) {
              term
           } else {
-             term match
+             val retval = term match
                case Block(stats, expr) =>
                  Block(prev.map(_.extract) ++: stats, expr)
                case other =>
                  Block(prev.toList.map(_.extract) , other)
+             retval.changeOwner(Symbol.spliceOwner)
           }
 
 

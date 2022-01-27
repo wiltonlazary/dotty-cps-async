@@ -10,9 +10,9 @@ import cps.macros.misc._
 import scala.collection.immutable.HashMap
 
 
-trait InlinedTreeTransform[F[_], CT]:
+trait InlinedTreeTransform[F[_], CT, CC<:CpsMonadContext[F]]:
 
-  thisTreeTransform: TreeTransformScope[F,CT] =>
+  thisTreeTransform: TreeTransformScope[F,CT, CC] =>
 
   import qctx.reflect._
 
@@ -103,14 +103,13 @@ trait InlinedTreeTransform[F[_], CT]:
                                    changes = s.changes.updated(vx.symbol, bindingRecord)
                                   )
                          } else  {
+                            // here awaits usage are internal  (we just use)
+                            val monadContext = cpsCtx.monadContext.asTerm
+                     
                             val awaitValSym = Symbol.newVal(Symbol.spliceOwner, name+"$await", tpt.tpe,  
                                                             vx.symbol.flags, Symbol.noSymbol)
                             val awaitVal = ValDef(awaitValSym, Some(
-                                   Apply(Apply(TypeApply(Ref(awaitSymbol),
-                                                         List(TypeTree.of[F], Inferred(cpsRhs.otpe))),
-                                               List(Ref(newSym))),
-                                         List(monad)).changeOwner(awaitValSym)
-
+                                   generateAwaitFor(Ref(newSym), cpsRhs.otpe).changeOwner(awaitValSym)
                             ))
                             val bindingRecord =  InlinedValBindingRecord(awaitValSym, cpsRhs, vx) 
                             s.copy(newBindings = newValDef::s.newBindings,
@@ -158,12 +157,7 @@ trait InlinedTreeTransform[F[_], CT]:
                                   val newApply = Select.unique(Ref(funBinding.newSym),"apply")
                                   val changed = Apply(TypeApply(newApply,targs),newArgs)
                                   if (funBinding.cpsTree.isAsync) then
-                                     Apply(Apply(TypeApply(
-                                               Ref(awaitSymbol),
-                                               List(TypeTree.of[F], Inferred(changed.tpe))),
-                                             List(changed)),
-                                       List(monad)
-                                     )
+                                     generateAwaitFor(changed, changed.tpe)
                                   else
                                      changed
                                 case _ =>
@@ -177,11 +171,7 @@ trait InlinedTreeTransform[F[_], CT]:
                               val newApply = Select.unique(Ref(binding.newSym),"apply")
                               val changed = Apply(newApply,newArgs)
                               if (binding.cpsTree.isAsync) then
-                                 Apply(Apply(TypeApply(
-                                               Ref(awaitSymbol),
-                                               List(TypeTree.of[F], Inferred(changed.tpe))),
-                                             List(changed)),
-                                       List(monad))
+                                 generateAwaitFor(changed, changed.tpe)
                               else
                                  changed
                            case _ =>
@@ -228,7 +218,7 @@ trait InlinedTreeTransform[F[_], CT]:
     val awaitVals = funValDefs.awaitVals.filter(x => usedAwaitVals.contains(x.symbol))
     val body  = 
       if (!awaitVals.isEmpty) {
-             bodyWithoutAwaits match
+             bodyWithoutAwaits.changeOwner(Symbol.spliceOwner) match
                  case Block(statements, last) => Block(awaitVals ++ statements, last)
                  case other => Block(awaitVals, other)
       } else 
@@ -256,20 +246,37 @@ trait InlinedTreeTransform[F[_], CT]:
         case _ => None
 
 
+  def generateAwaitFor(term: Term, tpe:TypeRepr): Term =
+   val monad = cpsCtx.monad.asTerm
+   val monadContext = cpsCtx.monadContext.asTerm
+   Apply(
+      Apply(
+         TypeApply(
+            Ref(awaitSymbol),
+            List(Inferred(TypeRepr.of[F]), Inferred(tpe), Inferred(TypeRepr.of[F]) )
+         ),
+         List(term)
+      ),
+      List(monad, monadContext)
+   )
+
+
 object InlinedTreeTransform:
 
 
-  def run[F[_]:Type,T:Type](using qctx1: Quotes)(cpsCtx1: TransformationContext[F,T],
+  def run[F[_]:Type,T:Type, C<:CpsMonadContext[F]:Type](using qctx1: Quotes)(cpsCtx1: TransformationContext[F,T,C],
                          inlinedTerm: qctx1.reflect.Inlined): CpsExpr[F,T] = {
 
      val tmpFType = summon[Type[F]]
      val tmpCTType = summon[Type[T]]
-     class Bridge(tc:TransformationContext[F,T]) extends
-                                                    TreeTransformScope[F,T]
-                                                    with TreeTransformScopeInstance[F,T](tc) {
+     val tmpCCType = summon[Type[C]]
+     class Bridge(tc:TransformationContext[F,T,C]) extends
+                                                    TreeTransformScope[F,T,C]
+                                                    with TreeTransformScopeInstance[F,T,C](tc) {
 
          implicit val fType: quoted.Type[F] = tmpFType
          implicit val ctType: quoted.Type[T] = tmpCTType
+         implicit val ccType: quoted.Type[C] = tmpCCType
 
          def bridge(): CpsExpr[F,T] =
             val origin = inlinedTerm.asInstanceOf[quotes.reflect.Inlined]

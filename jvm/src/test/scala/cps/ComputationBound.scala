@@ -1,5 +1,6 @@
 package cps
 
+import scala.concurrent.Future
 import scala.concurrent.duration._
 import scala.quoted._
 import scala.language.postfixOps
@@ -10,20 +11,56 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeoutException
 
 
+
 trait ComputationBound[+T] {
  
+ /**
+  * run computation and return a failure with TimeoutException
+  * if this computation was not fully computed during timeout.
+  *
+  * Note, that this function is blocks current thread, so
+  * you should not use one in async environment. 
+  **/    
   def run(timeout: Duration = Duration.Inf): Try[T] =
     fulfill(timeout) match 
       case Some(v) => v
       case None => Failure(new TimeoutException())
 
+  /**
+   * run computation and return Some(result) if it was 
+   * fully finished during timeout or None if not
+   *
+   * Note, that this function is blocks current thread, so
+   * you should not use one in async environment. 
+   **/    
   def fulfill(timeout: Duration): Option[Try[T]] = 
         progress(timeout) match 
            case Done(t) => Some(Success(t))
            case Error(e) => Some(Failure(e))
            case _ => None
 
+  /**
+   * run computation during some time and return
+   * a current progress, which can be other computation then original
+   * or Done/Error when computation is completed.
+   *
+   * Note, that this function is blocks current thread, so
+   * you should not use one in async environment. 
+   **/               
   def progress(timeout: Duration): ComputationBound[T]
+
+  /**
+   * needed for compability with javascript version.
+   */
+  def runTicks(timeout: Duration): Future[T] =
+    import scala.concurrent.ExecutionContext.Implicits.global
+    Future{
+      progress(timeout) match {
+        case Done(t) => t
+        case Error(e) => throw e
+        case _ => throw new TimeoutException()
+      }
+    }
 
   def map[S](f:T=>S): ComputationBound[S] =
      flatMap( x => Done(f(x)) )
@@ -75,14 +112,15 @@ object ComputationBound {
       val secondQueue = new ConcurrentLinkedQueue[Deferred[?]]
       while(!deferredQueue.isEmpty && System.nanoTime < endNanos) 
         val c = deferredQueue.poll()
-        if (!(c eq null)) then
-          c.ref.get() match 
+        if (c != null) then
+          val cr: Option[?] = c.nn.ref.get().nn
+          cr match 
             case Some(r) => nFinished += 1
             case None =>
                c.optComputations match
                   case Some(r) =>     
                     r match
-                       case Wait(ref1, _) if ref1.get().isEmpty  => // do nothing
+                       case Wait(ref1, _) if ref1.get().nn.isEmpty  => // do nothing
                          secondQueue.add(c)
                        case _ =>
                          val nextR = r.progress((endNanos - System.nanoTime) nanos)
@@ -97,8 +135,8 @@ object ComputationBound {
                     secondQueue.add(c)
       while(!secondQueue.isEmpty)
          val r = secondQueue.poll()
-         if !(r eq null) then
-            deferredQueue.add(r)
+         if r != null then
+            deferredQueue.add(r.nn)
       if (nFinished == 0)
          val timeToWait = math.min(waitQuant, endNanos - System.nanoTime)
          val timeToWaitMillis = (timeToWait nanos).toMillis
@@ -113,13 +151,12 @@ object ComputationBound {
         spawn(f)
       
    def lazyMemoize[T](f: ComputationBound[T]): ComputationBound[T] =
-        Thunk(() => spawn(f))
-         
+        Thunk(() => spawn(f))     
 
 }
 
 
-implicit object ComputationBoundAsyncMonad extends CpsAsyncMonad[ComputationBound] {
+implicit object ComputationBoundAsyncMonad extends CpsAsyncMonad[ComputationBound] with CpsMonadInstanceContext[ComputationBound] {
 
    type WF[T] = ComputationBound[T]
 
@@ -163,6 +200,7 @@ implicit object ComputationBoundAsyncMonad extends CpsAsyncMonad[ComputationBoun
 
    def fulfill[T](t: ComputationBound[T], timeout: Duration): Option[Try[T]] =
           t.fulfill(timeout)
+
 
 
 }
@@ -227,13 +265,13 @@ case class Wait[R,T](ref: AtomicReference[Option[Try[R]]], op: Try[R] => Computa
          val beforeWait = Duration(System.nanoTime, NANOSECONDS)
          if (timeout.isFinite) 
             val endTime = (beforeWait + timeout).toNanos
-            while(ref.get().isEmpty && ( System.nanoTime < endTime ) )
+            while(ref.get().nn.isEmpty && ( System.nanoTime < endTime ) )
                ComputationBound.advanceDeferredQueue(endTime)
          else
-            while(ref.get().isEmpty)
+            while(ref.get().nn.isEmpty)
                val endTime = System.nanoTime + 1000000
                ComputationBound.advanceDeferredQueue(endTime)
-         ref.get.map{ r => 
+         ref.get().nn.map{ r => 
              val afterWait = Duration(System.nanoTime, NANOSECONDS)
              op(r).progress(timeout - (afterWait - beforeWait)) 
          }.getOrElse(this)

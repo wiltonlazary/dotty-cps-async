@@ -7,7 +7,7 @@ import cps.macros._
 import cps.macros.misc._
 
 
-class TryTransform[F[_]:Type,T:Type](cpsCtx: TransformationContext[F,T]):
+class TryTransform[F[_]:Type,T:Type,C<:CpsMonadContext[F]:Type](cpsCtx: TransformationContext[F,T,C]):
 
   import cpsCtx._
 
@@ -24,7 +24,7 @@ class TryTransform[F[_]:Type,T:Type](cpsCtx: TransformationContext[F,T]):
                                                   cpsCtx))
      val isCaseDefsAsync = cpsCaseDefs.exists(_.isAsync)
      val isCaseDefsChanged = cpsCaseDefs.exists(_.isChanged)
-     val optCpsFinalizer = finalizer.map( x => Async.nestTransform[F,T,Unit](
+     val optCpsFinalizer = finalizer.map( x => Async.nestTransform[F,T,C,Unit](
                                         x.asExprOf[Unit], cpsCtx ))
      val isFinalizerAsync = optCpsFinalizer.exists(_.isAsync)
      val isFinalizerChanged = optCpsFinalizer.exists(_.isChanged)
@@ -43,7 +43,7 @@ class TryTransform[F[_]:Type,T:Type](cpsCtx: TransformationContext[F,T]):
 
      def makeRestoreExpr(): Expr[Throwable => F[T]]  =
         val nCaseDefs = makeAsyncCaseDefs()
-        val restoreExpr = '{ (ex: Throwable) => ${Match('ex.asTerm, nCaseDefs).asExprOf[F[T]]} }
+        val restoreExpr = '{ (ex: Throwable) => ${Match('ex.asTerm, nCaseDefs).changeOwner(Symbol.spliceOwner).asExprOf[F[T]]} }
         restoreExpr.asExprOf[Throwable => F[T]]
 
 
@@ -83,7 +83,7 @@ class TryTransform[F[_]:Type,T:Type](cpsCtx: TransformationContext[F,T]):
                                  val nBody = '{ ${monad}.pure($syncBody) }.asTerm
                                  CpsExpr.async[F,T](cpsCtx.monad,
                                     Try(nBody, makeAsyncCaseDefs(), None).asExprOf[F[T]]
-                                 )
+                                 ) 
                         case Some(cpsFinalizer) =>
                            if (cpsCaseDefs.isEmpty)
                              cpsBody.syncOrigin match

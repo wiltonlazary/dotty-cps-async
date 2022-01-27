@@ -16,9 +16,9 @@ class TestFutureRangeReader:
 
   //import scala.concurrent.ExecutionContext.Implicits.global 
 
-  given ExecutionContext = ExecutionContext.fromExecutorService(ForkJoinPool.commonPool())
+  given ExecutionContext = ExecutionContext.fromExecutorService(ForkJoinPool.commonPool().nn)
 
-  import cps.monads.FutureAsyncMonad
+  import cps.monads.{*,given}
  
 
   @Test def tryFewRangeLoops(): Unit = 

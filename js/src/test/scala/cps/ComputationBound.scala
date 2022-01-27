@@ -155,7 +155,7 @@ object ComputationBound {
 
 }
 
-implicit object ComputationBoundAsyncMonad extends CpsAsyncMonad[ComputationBound] {
+implicit object ComputationBoundAsyncMonad extends CpsAsyncMonad[ComputationBound] with CpsMonadInstanceContext[ComputationBound]  {
 
    type WF[T] = ComputationBound[T]
 
@@ -198,6 +198,7 @@ implicit object ComputationBoundAsyncMonad extends CpsAsyncMonad[ComputationBoun
    def spawn[A](op: => ComputationBound[A]): ComputationBound[A] =
           ComputationBound.spawn(op)
 
+                  
 }
 
 case class Thunk[T](thunk: ()=>ComputationBound[T]) extends ComputationBound[T] {

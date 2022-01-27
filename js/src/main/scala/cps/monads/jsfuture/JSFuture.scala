@@ -31,11 +31,25 @@ object JSFutureExecutor:
           case Failure(e) =>
                       reject(e)
       }
-      
+   
                           
 
 
-
+/**
+ * JSFuture is a class, which can be represented on the js-side as a JSPromise and on the scala side - as a Future.
+ *
+ * ```
+ *     @JSExportTopLevel("FromScalaExample")
+ *     object FromScalaExample:
+ *
+ *         @JSExport
+ *         def myFunction(x: String): JSFuture[String] = async[JSFuture] {
+ *              .....
+ *         }
+ * ```
+ * I.e. in the example above we can use FromScalaExample.myFunction("x") as JS-function which return ps.Promise
+ * and inside async use usual async/await monadic API.
+ **/
 class JSFuture[T](
      val executorOrUndef: js.UndefOr[js.Function2[js.Function1[T | js.Thenable[T], _], js.Function1[scala.Any, _], _]],
      val futureOrUndef: js.UndefOr[Future[T]]) extends js.Promise[T](
@@ -102,35 +116,37 @@ class JSFuture[T](
 
 }
 
+object JSFuture:
+   
+   given JSFutureCpsMonad: CpsTryMonad[JSFuture] with CpsMonadInstanceContext[JSFuture] with
 
-given JSFutureCpsMonad: CpsTryMonad[JSFuture] with
+      def pure[A](a:A): JSFuture[A] = new JSFuture[A](js.undefined, Future successful a)
 
-
-   def pure[A](a:A): JSFuture[A] = new JSFuture[A](js.undefined, Future successful a)
-
-   def map[A,B](fa: JSFuture[A])(f: A=>B): JSFuture[B] =
+      def map[A,B](fa: JSFuture[A])(f: A=>B): JSFuture[B] =
         fa.map(f)
 
-   def flatMap[A,B](fa: JSFuture[A])(f: A=> JSFuture[B]): JSFuture[B] =
+      def flatMap[A,B](fa: JSFuture[A])(f: A=> JSFuture[B]): JSFuture[B] =
         fa.flatMap(f)
 
-   def error[A](ex:Throwable): JSFuture[A] = new JSFuture[A](js.undefined, Future failed ex)
+      def error[A](ex:Throwable): JSFuture[A] = new JSFuture[A](js.undefined, Future failed ex)
 
-   override def mapTry[A,B](fa: JSFuture[A])(f: Try[A]=>B): JSFuture[B] =
+      override def mapTry[A,B](fa: JSFuture[A])(f: Try[A]=>B): JSFuture[B] =
         fa.mapTry(f)
 
-   def flatMapTry[A,B](fa: JSFuture[A])(f: Try[A]=> JSFuture[B]): JSFuture[B] =
+      def flatMapTry[A,B](fa: JSFuture[A])(f: Try[A]=> JSFuture[B]): JSFuture[B] =
         fa.flatMapTry(f)
 
+   end JSFutureCpsMonad
 
-given CpsMonadConversion[Future,JSFuture] with
-   def apply[T](ft:Future[T]): JSFuture[T] =
+
+   given CpsMonadConversion[Future,JSFuture] with
+      def apply[T](ft:Future[T]): JSFuture[T] =
          new JSFuture(js.undefined, ft)
 
-given CpsMonadConversion[JSFuture, Future] with
-   def apply[T](ft:JSFuture[T]): Future[T] = ft.future
+   given CpsMonadConversion[JSFuture, Future] with
+      def apply[T](ft:JSFuture[T]): Future[T] = ft.future
 
-given CpsMonadConversion[js.Promise, JSFuture] with
-   def apply[T](ft:js.Promise[T]): JSFuture[T] = 
+   given CpsMonadConversion[js.Promise, JSFuture] with
+      def apply[T](ft:js.Promise[T]): JSFuture[T] = 
          new JSFuture(js.undefined, ft.toFuture)
 

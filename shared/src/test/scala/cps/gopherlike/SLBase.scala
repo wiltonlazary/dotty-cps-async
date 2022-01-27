@@ -8,7 +8,7 @@ import scala.quoted._
 import scala.compiletime._
 
 
-class SLSelectLoop[F[_]:CpsMonad]:
+class SLSelectLoop[F[_]](using val am:CpsMonad[F]):
 
   case class ReadRecord[A](reader: IFReader[F,A], handler: A=>F[Boolean])
   case class WriteRecord[A](writer: IFWriter[F,A], value: ()=>F[A], handler: A=>F[Boolean])
@@ -40,24 +40,24 @@ class SLSelectLoop[F[_]:CpsMonad]:
       summon[CpsMonad[F]].pure(this)
 
 
-  transparent inline def apply(inline pf: PartialFunction[Any,Boolean]): Unit =
+  transparent inline def apply(inline pf: PartialFunction[Any,Boolean])(using inline mc:CpsMonadContext[F]): Unit =
     ${  
-      SLSelectLoop.loopImpl[F]('pf, '{summon[CpsMonad[F]]})  
+      SLSelectLoop.loopImpl('pf, 'am, 'mc )  
     }    
   
-  transparent inline def applyAsync(inline pf: PartialFunction[Any,F[Boolean]]): Unit =
+  transparent inline def applyAsync(inline pf: PartialFunction[Any,F[Boolean]])(using inline mc:CpsMonadContext[F]): Unit =
     ${
-      SLSelectLoop.loopImplAsync[F]('pf, '{summon[CpsMonad[F]]})  
+      SLSelectLoop.loopImplAsync[F]('pf, 'am, 'mc)  
     }
   
 
   def runAsync():F[Unit] =
     if (readers.isEmpty)
-      summon[CpsMonad[F]].pure(())
+      am.pure(())
     else
-      summon[CpsMonad[F]].map(readers.head.reader.aread())(a => ())
+      am.map(readers.head.reader.aread())(a => ())
 
-  transparent inline def run(): Unit =
+  transparent inline def run()(using CpsMonadContext[F]): Unit =
     await(runAsync())
       
   def fold[S](s0:S)(step: (S,SLSelectLoop[F])=> S|SLSelectLoop.Done[S]): S = {
@@ -81,18 +81,17 @@ class SLSelectLoop[F[_]:CpsMonad]:
 
   def fold1_async[S](s0:S)(step: (S,SLSelectLoop[F])=> F[S|SLSelectLoop.Done[S]], limit: Int): F[S] = {
      if (limit > 0) then
-       summon[CpsMonad[F]].flatMap(step(s0, new SLSelectLoop[F])){ r =>
+       am.flatMap(step(s0, new SLSelectLoop[F])){ r =>
           r match
-            case SLSelectLoop.Done(s) => 
-                            summon[CpsMonad[F]].pure(s.asInstanceOf[S])
+            case SLSelectLoop.Done(s) => am.pure(s.asInstanceOf[S])
             case other => fold1_async(other.asInstanceOf[S])(step, limit-1)
        }
      else
-       summon[CpsMonad[F]].pure(s0)
+       am.pure(s0)
   }
 
-  transparent inline def afold[S](s0:S)(inline step: (S,SLSelectLoop[F]) => S|SLSelectLoop.Done[S]): F[S] =
-     async[F] {
+  transparent inline def afold[S](inline s0:S)(inline step: (S,SLSelectLoop[F]) => S|SLSelectLoop.Done[S]): F[S] =
+     async[F] { 
        fold(s0)(step)
      }
 
@@ -102,6 +101,8 @@ class SLSelectLoop[F[_]:CpsMonad]:
      
 
 object SLSelectLoop:
+
+  def create[F[_]](using am:CpsMonad[F]) = SLSelectLoop(using am)
 
   case class Done[S](s:S)
 
@@ -132,7 +133,7 @@ object SLSelectLoop:
       '{  $base.onWriteAsync($ch,()=>$m.pure($a))(${f.asExprOf[A=>F[Boolean]]}) }
 
 
-  def loopImpl[F[_]:Type](pf: Expr[PartialFunction[Any,Boolean]], m: Expr[CpsMonad[F]])(using Quotes): Expr[Unit] =
+  def loopImpl[F[_]:Type](pf: Expr[PartialFunction[Any,Boolean]], m: Expr[CpsMonad[F]], mc:Expr[CpsMonadContext[F]])(using Quotes): Expr[Unit] =
       def builder(caseDefs: List[SelectorCaseExpr[F]]):Expr[Unit] = {
           val s0 = '{
               new SLSelectLoop[F](using $m)
@@ -140,13 +141,13 @@ object SLSelectLoop:
           val g: Expr[SLSelectLoop[F]] = caseDefs.foldLeft(s0){(s,e) =>
               e.appended(s)
           }
-          val r = '{ $g.run() }
+          val r = '{ $g.run()(using $mc) }
           r.asExprOf[Unit]
       }
       runImpl( builder, pf, m)
       
 
-  def loopImplAsync[F[_]:Type](pf: Expr[PartialFunction[Any,F[Boolean]]], m: Expr[CpsMonad[F]])(using Quotes): Expr[Unit] =
+  def loopImplAsync[F[_]:Type](pf: Expr[PartialFunction[Any,F[Boolean]]], m: Expr[CpsMonad[F]], mc:Expr[CpsMonadContext[F]])(using Quotes): Expr[Unit] =
       def builder(caseDefs: List[SelectorCaseExpr[F]]):Expr[Unit] = {
           val s0 = '{
               new SLSelectLoop[F](using $m)
@@ -154,12 +155,12 @@ object SLSelectLoop:
           val g: Expr[SLSelectLoop[F]] = caseDefs.foldLeft(s0){(s,e) =>
               e.appendedAsync(s)
           }
-          val r = '{ $g.run() }
+          val r = '{ $g.run()(using $mc) }
           r.asExprOf[Unit]
       }
       runImpl( builder, pf, m)
 
-  def runImpl[F[_]:Type, A:Type,B :Type](builder: List[SelectorCaseExpr[F]]=>Expr[B],
+  def runImpl[F[_]:Type, C:Type, A:Type,B :Type](builder: List[SelectorCaseExpr[F]]=>Expr[B],
                                  pf: Expr[PartialFunction[Any,A]],
                                  m: Expr[CpsMonad[F]])(using Quotes): Expr[B] =
     import quotes.reflect._
@@ -187,7 +188,7 @@ object SLSelectLoop:
     import qctx.reflect._
     caseDef.pattern match 
       case Inlined(_,List(),body) => 
-            parseCaseDef(CaseDef(body, caseDef.guard, caseDef.rhs),m)
+            parseCaseDef[F,S](CaseDef(body, caseDef.guard, caseDef.rhs),m)
       case b@Bind(v, tp@Typed(expr, TypeSelect(ch,"read"))) =>
           val readFun = makeLambda(v,tp.tpe,b.symbol,caseDef.rhs)
           if (ch.tpe <:< TypeRepr.of[IFReader[F,?]]) 

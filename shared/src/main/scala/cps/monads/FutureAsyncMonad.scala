@@ -7,7 +7,11 @@ import scala.quoted._
 import scala.util._
 import scala.util.control._
 
-given FutureAsyncMonad(using ExecutionContext): CpsSchedulingMonad[Future] with
+
+/**
+ * Default CpsMonad implementation for `Future`
+ **/
+class FutureAsyncMonadAPI(using ExecutionContext) extends CpsSchedulingMonad[Future] with CpsMonadInstanceContext[Future] {
 
    type F[+T] = Future[T]
 
@@ -51,33 +55,44 @@ given FutureAsyncMonad(using ExecutionContext): CpsSchedulingMonad[Future] with
         }
         p.future
 
+   /**
+   * returns failed Future, because cancellation is not supported.
+   */     
    def tryCancel[A](op: Future[A]): Future[Unit] =
         Future failed new UnsupportedOperationException("FutureAsyncMonad.tryCancel is unsupported")
 
+   /**
+    * join two computations in such way, that they will execute concurrently.
+    *  Since Future computation is already spawned, we can not spawn waiting for results here
+    **/
+   override def concurrently[A,B](fa:F[A], fb:F[B]): F[Either[(Try[A],Future[B]),(Future[A],Try[B])]] =
+       val p = Promise[Either[(Try[A],Future[B]),(Future[A],Try[B])]]
+       fa.onComplete{ ra =>
+          p.tryComplete(Success(Left((ra,fb))))
+       }
+       fb.onComplete{ rb =>
+          p.tryComplete(Success(Right((fa,rb))))
+       }
+       p.future
 
-   def fulfill[T](t:F[T], timeout: Duration): Option[Try[T]] =
-        try
-          Await.ready(t, timeout)
-          t.value
-        catch
-          case ex: TimeoutException => t.value
-
+  
    def executionContext = summon[ExecutionContext]
 
+}
+
+given FutureAsyncMonad(using ec: ExecutionContext): FutureAsyncMonadAPI = new FutureAsyncMonadAPI
+
+given futureDiscard: cps.automaticColoring.WarnValueDiscard[Future] with {}
+
+
+given futureMemoization: CpsMonadMemoization.Default[Future] with {}
 
 
 
-given cps.automaticColoring.WarnValueDiscard[Future] with {}
-
-
-given CpsMonadDefaultMemoization[Future] with {}
-
-
-
-given fromFutureConversion[G[_],T](using ExecutionContext, CpsAsyncMonad[G]): CpsMonadConversion[Future,G] with
+given fromFutureConversion[G[_],T](using ex: ExecutionContext, m: CpsAsyncMonad[G]): CpsMonadConversion[Future,G] with
 
   def apply[T](ft:Future[T]): G[T] =
-    summon[CpsAsyncMonad[G]].adoptCallbackStyle(listener => ft.onComplete(listener) )
+     summon[CpsAsyncMonad[G]].adoptCallbackStyle(listener => ft.onComplete(listener) )
                                          
 
 given toFutureConversion[F[_], T](using ExecutionContext, CpsSchedulingMonad[F]): CpsMonadConversion[F,Future] with
