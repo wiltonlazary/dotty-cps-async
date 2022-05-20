@@ -1,8 +1,9 @@
 // root transform for low-level tasty trees.
-//  (C) Ruslan Shevchenko, 2019-2021, Kiev, Ukraine
+//  (C) Ruslan Shevchenko, 2019-2022, Kiev, Ukraine
 package cps.macros.forest
 
 import scala.quoted._
+import scala.util.control.NonFatal
 
 import cps._
 import cps.macros._
@@ -39,7 +40,7 @@ trait RootTreeTransform[F[_], CT, CC <: CpsMonadContext[F] ]:
                             )
                   case applyTerm@Apply(fun,args)  =>
                             val tree = B2.inNestedContext(applyTerm,  muted, scope =>
-                               scope.runApply(applyTerm.asInstanceOf[scope.qctx.reflect.Term],
+                               scope.runApply(applyTerm.asInstanceOf[scope.qctx.reflect.Apply],
                                               fun.asInstanceOf[scope.qctx.reflect.Term],
                                               args.asInstanceOf[List[scope.qctx.reflect.Term]],
                                               Nil).inCake(thisTransform)
@@ -50,7 +51,11 @@ trait RootTreeTransform[F[_], CT, CC <: CpsMonadContext[F] ]:
                                scope.runInlined(inlined.asInstanceOf[scope.qctx.reflect.Inlined])
                                     .inCake(thisTransform)
                             )
-                            tree
+                            tree          
+                  // special case, until we not enabled total blcok          
+                  case block@Block(Nil, last) =>
+                             val cpsLast = runRoot(last, muted = muted)
+                             cpsLast
                   case _ =>  // TODO: elimi
                     val expr = term.asExpr
                     val monad = cpsCtx.monad
@@ -64,7 +69,12 @@ trait RootTreeTransform[F[_], CT, CC <: CpsMonadContext[F] ]:
                         } catch {
                              case e: MacroError  =>
                                 if (!e.printed) then
-                                  println(s"can't translate tree: ${term.show}" )
+                                  val termShowed = try {
+                                     term.show
+                                  } catch {
+                                     case NonFatal(ex) => term.toString
+                                  }
+                                  println(s"can't translate tree: ${termShowed}" )
                                   e.printStackTrace()
                                   throw e.copy(printed=true);
                                 else
@@ -72,7 +82,7 @@ trait RootTreeTransform[F[_], CT, CC <: CpsMonadContext[F] ]:
                         }
                         val r = exprToTree(rCpsExpr, term)
                         if cpsCtx.flags.debugLevel >= 10 then
-                           cpsCtx.log(s"runRoot: rCpsExpr=$rCpsExpr, async=${rCpsExpr.isAsync}")
+                           cpsCtx.log(s"runRoot: rCpsExpr=${rCpsExpr.show}, async=${rCpsExpr.isAsync}")
                            if cpsCtx.flags.debugLevel >= 15 then
                              cpsCtx.log(s"runRoot: r=$r")
                              cpsCtx.log(s"runRoot: origin=$term")
@@ -96,7 +106,7 @@ trait RootTreeTransform[F[_], CT, CC <: CpsMonadContext[F] ]:
              cpsQual.select(term, term.symbol, term.tpe.widen)
        case Ident(name) =>
              CpsTree.pure(term)
-       case Apply(x, args) =>
+       case applyTerm@Apply(x, args) =>
              val thisScope = this
              val nestContext = cpsCtx.nestSame(muted)
              val nestScope = new TreeTransformScope[F,CT,CC] {
@@ -106,7 +116,7 @@ trait RootTreeTransform[F[_], CT, CC <: CpsMonadContext[F] ]:
                 override val ctType = thisScope.ctType
                 override val ccType = thisScope.ccType
              }
-             nestScope.runApply(term.asInstanceOf[nestScope.qctx.reflect.Term],
+             nestScope.runApply(applyTerm.asInstanceOf[nestScope.qctx.reflect.Apply],
                                 x.asInstanceOf[nestScope.qctx.reflect.Term],
                                 args.asInstanceOf[List[nestScope.qctx.reflect.Term]],
                                 Nil).asInstanceOf[CpsTree]

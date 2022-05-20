@@ -1,7 +1,7 @@
 /*
  * dotty-cps-async: https://github.com/rssh/dotty-cps-async
  *
- * (C) Ruslan Shevchenko <ruslan@shevchenko.kiev.ua>, Kyiv, 2020, 2021
+ * (C) Ruslan Shevchenko <ruslan@shevchenko.kiev.ua>, Kyiv, 2020, 2021, 2022
  */
 package cps.macros
 
@@ -9,6 +9,7 @@ import scala.language.implicitConversions
 
 import scala.quoted._
 import scala.compiletime._
+import scala.util.control.NonFatal
 
 import cps.*
 import cps.macros.*
@@ -29,7 +30,7 @@ object Async {
             //)
 
        
-       transparent inline def in[T](using mc: CpsMonadContextProvider[F] )(inline expr: mc.Context ?=> T ): F[T]  = 
+       transparent inline def in[T](mc: CpsMonadContextProvider[F] )(inline expr: mc.Context ?=> T ): F[T]  = 
             mc.contextualize(transformContextLambda(expr))
        
   }
@@ -55,6 +56,7 @@ object Async {
    **/
   def transformImpl[F[_]:Type,T:Type,C<:CpsMonadContext[F]:Type](f: Expr[T], c:Expr[C])(using Quotes): Expr[F[T]] =
     import quotes.reflect._
+      
     Expr.summon[CpsMonad[F]] match
        case Some(dm) =>
           transformMonad[F,T,C](f,dm,c)
@@ -214,8 +216,8 @@ object Async {
          case _ =>
              val fTree = f.asTerm
              fTree match {
-                case Apply(fun,args) =>
-                   ApplyTransform(cpsCtx).run(fun,args)
+                case afTree@Apply(fun,args) =>
+                   ApplyTransform(cpsCtx).run(afTree,fun,args)
                 case TypeApply(fun,args) =>
                    TypeApplyTransform(cpsCtx).run(fun,args)
                 case Assign(left,right) =>
@@ -262,7 +264,15 @@ object Async {
             val x = dummyMap.transformTerm(retval.transformed.asTerm)(Symbol.spliceOwner) 
          }catch{
             case ex: Throwable =>
-               println(s"Here, input term is ${f.show}, tree:${f.asTerm}")
+               val fShow = try {
+                  f.show
+               } catch {
+                  case NonFatal(e) =>
+                        //e.printStackTrace()
+                        report.warning("exception during printinh type")
+                        "(exception during show)"
+               }
+               println(s"Here, input term is ${fShow}, tree:${f.asTerm}")
                throw ex;
          }  
      retval

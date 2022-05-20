@@ -1,9 +1,15 @@
+# 🇺🇦 HELP UKRAINE
+
+I'm the creator of this project. 
+My country, Ukraine, [is being invaded by the Russian Federation, right now](https://war.ukraine.ua). If you want to help my country to fight, consider donating to [charity supporting Ukrainian army](https://www.comebackalive.in.ua/). More options is described on [support ukraine](https://supportukrainenow.org/) site.
+
+
 # dotty-cps-async
 
 
-This is the implementation of async/await transformation for [Scala 3][scala3] (Dotty), based on an optimized version of [cps] (*continuation passing style*) transformation, where continuation is ‘pushed’ to the monad. 
+This is the implementation of async/await transformation for [Scala 3][scala3] (Dotty), based on an optimized version of [CPS] (*Continuation Passing Style*) transformation, where the continuation is ‘pushed’ to the monad. 
 
-## Highlightings
+## <span id="highlights">Highlights</span>
 
  * Full support of all Scala language constructs in async/await block.
  * Pluggable monad interface:  
@@ -17,14 +23,14 @@ This is the implementation of async/await transformation for [Scala 3][scala3] (
 For more details, please, read the documentation at https://rssh.github.io/dotty-cps-async/.
 
 
-## Presentations
+## <span id="presentations">Presentations</span>
 
 * Scala3 & Async: Behind Futures.
-   * Svitla Smart Talk. https://www.youtube.com/watch?v=fBcGhjM2s-c (Apr. 2021. In Ukrainian language).
+   * Svitla Smart Talk. https://www.youtube.com/watch?v=fBcGhjM2s-c (April 2021. In Ukrainian language).
 
 * Can we free concurrent programming from the monadic style?
-    * ScalaR:  https://www.youtube.com/watch?v=ImlUuTQUeaQ  (Jun 2020)
-    * ScalaUA: https://www.youtube.com/watch?v=w-noRPLxYoA&t=3s  (Apr. 2020)
+    * ScalaR:  https://www.youtube.com/watch?v=ImlUuTQUeaQ  (June 2020)
+    * ScalaUA: https://www.youtube.com/watch?v=w-noRPLxYoA&t=3s  (April 2020)
    (slides: https://www.slideshare.net/rssh1/can-concurrent-functional-programming-be-liberated-from-monadic-style )
 
 [cps]: https://en.wikipedia.org/wiki/Continuation-passing_style

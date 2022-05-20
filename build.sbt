@@ -1,10 +1,12 @@
 //val dottyVersion = "3.0.2-RC1-bin-SNAPSHOT"
 //val dottyVersion = "3.1.2-RC1-bin-SNAPSHOT"
-val dottyVersion = "3.1.1"
-//val dottyVersion = "3.1.0"
+val dottyVersion = "3.1.2"
+//val dottyVersion = "3.1.1"
 
-ThisBuild/version := "0.9.7"
+ThisBuild/version := "0.9.9-SNAPSHOT"
 ThisBuild/versionScheme := Some("semver-spec")
+ThisBuild/resolvers += Opts.resolver.sonatypeSnapshots
+
 
 
 val sharedSettings = Seq(
@@ -16,7 +18,7 @@ val sharedSettings = Seq(
 
 lazy val root = project
   .in(file("."))
-  .aggregate(cps.js, cps.jvm)
+  .aggregate(cps.js, cps.jvm, cps.native)
   .settings(
     Sphinx / sourceDirectory := baseDirectory.value / "docs",
     SiteScaladocPlugin.scaladocSettings(CpsJVM, cps.jvm / Compile / packageDoc / mappings, "api/jvm"),
@@ -31,14 +33,14 @@ lazy val root = project
   ).disablePlugins(MimaPlugin)
 
 
-lazy val cps = crossProject(JSPlatform, JVMPlatform)
+lazy val cps = crossProject(JSPlatform, JVMPlatform, NativePlatform)
     .in(file("."))
     .settings(sharedSettings)
     .disablePlugins(SitePreviewPlugin)
     .jvmSettings(
         scalacOptions ++= Seq( "-Yexplicit-nulls",
                             "-unchecked", "-Ydebug-trace", "-Ydebug-names", "-Xprint-types", 
-                            "-Ydebug", "-uniqid", "-Xcheck-macros", "-Ycheck:macro", "-Yprint-syms"  ),
+                            "-Ydebug", "-uniqid", "-Xcheck-macros", "-Ycheck:macro", "-Yprint-syms", "-explain"  ),
                              // -explain
                              // -Ydebug-error
                              // -Ydebug-tree-with-id -1
@@ -52,10 +54,16 @@ lazy val cps = crossProject(JSPlatform, JVMPlatform)
         Compile / doc / scalacOptions := Seq("-groups",  
                 "-source-links:shared=github://rssh/dotty-cps-async/master#shared",
                 "-source-links:js=github://rssh/dotty-cps-async/master#js"),
-        libraryDependencies += ("org.scala-js" %% "scalajs-junit-test-runtime" % "1.7.1" % Test).cross(CrossVersion.for3Use2_13),
+        libraryDependencies += ("org.scala-js" %% "scalajs-junit-test-runtime" % "1.8.0" % Test).cross(CrossVersion.for3Use2_13),
         mimaFailOnNoPrevious := false
+    ).nativeSettings(
+        libraryDependencies += "org.scala-native" %%% "junit-runtime" % nativeVersion % Test,
+        libraryDependencies += "com.github.lolgab" %%% "native-loop-core" % "0.2.1" % Test,
+        addCompilerPlugin("org.scala-native" % "junit-plugin" % nativeVersion cross CrossVersion.full) 
+
     )
 
 lazy val CpsJVM = config("cps.jvm")
 lazy val CpsJS = config("cps.js")
+//lazy val CpsNative = config("cps.native")
 lazy val Root = config("root")
