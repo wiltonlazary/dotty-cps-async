@@ -3,24 +3,29 @@ package futureScope
 import java.util.concurrent.atomic.*
 import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeoutException
 
 import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.*
+import scala.concurrent.duration.*
 import scala.util.*
 import scala.util.control.*
 
 import cps.*
 import cps.monads.{given,*}
 
+import futureScope.util.*
 
 
 /**
  * ScopedContext - bring structured concurrency primitives for futures.
  **/
-class FutureScopeContext(ec: ExecutionContext, parentScope: Option[FutureScopeContext] = None) extends CpsMonadContext[Future] with Cancellable {
+class FutureScopeContext(ec: ExecutionContext, parentScope: Option[FutureScopeContext] = None) extends CpsMonadContext[Future] 
+                                                                                                  with ExecutionContextProvider  
+                                                                                                  with Cancellable {
 
   val stateRef = new AtomicReference[FutureScopeContext.State](FutureScopeContext.State.Active) 
-  private val cancellables: ConcurrentHashMap[Cancellable,Cancellable] = new ConcurrentHashMap() 
+  private val cancellableFutures: ConcurrentHashMap[CancellableFuture[?],CancellableFuture[?]] = new ConcurrentHashMap() 
   private val nonCancellables: ConcurrentHashMap[Promise[Unit],Promise[Unit]] = new ConcurrentHashMap()
   //private val blocking:
   //TODO: injext
@@ -28,24 +33,49 @@ class FutureScopeContext(ec: ExecutionContext, parentScope: Option[FutureScopeCo
   private val finishCallbacks: ConcurrentLinkedDeque[() => Future[Unit]] = new ConcurrentLinkedDeque()
   private val finishPromise: Promise[Unit] = Promise()
   
-
   def executionContext: ExecutionContext = ec
 
-  override def adoptAwait[A](fa: Future[A]):Future[A] =
+  override def adoptAwait[A](fa: Future[A]):Future[A] = {
     given ExecutionContext = ec
     stateRef.get match
-      case FutureScopeContext.State.Active =>
-        val p = Promise[A]()
-        val c = CancellablePromise(p)
-        fa.onComplete{ x =>
-          cancellables.remove(c)
-          x match
-            case Success(x) => p.trySuccess(x)
-            case Failure(x) => p.tryFailure(x)
-          }  
-        p.future
+      case FutureScopeContext.State.Active =>    
+        if (fa eq finishPromise.future) then
+          fa
+        else
+          val p = Promise[A]()
+          val c = DelegatedCancellableFuture(p.future, 
+                   ex => {
+                    if p.tryFailure(ex) then
+                      CancellationResult.Cancelled
+                    else
+                      CancellationResult.AlreadyFinished
+                  }
+                )
+          addCancellableFuture(c)
+          fa.onComplete{ x =>
+            cancellableFutures.remove(c)
+            x match
+              case Success(x) => p.trySuccess(x)
+              case Failure(x) => p.tryFailure(x)
+            }  
+          // stateRef can be changed after addition
+          stateRef.get match
+            case FutureScopeContext.State.Active =>  
+                p.future
+            case FutureScopeContext.State.Cancelling(e) =>    
+                Future failed e      
+            case FutureScopeContext.State.Cancelled(e) =>    
+                Future failed e      
+            case _ =>
+                Future failed ScopeCancellationException()
+      case FutureScopeContext.State.Cancelling(e) =>
+        Future failed e
+      case FutureScopeContext.State.Cancelled(e) =>
+        Future failed e
       case _ =>
-        Future failed ScopeCancellationException()
+        // scope is finished. 
+        Future failed ScopeCancellationException("scope finished")
+  }
 
 
   def cancel(ex: ScopeCancellationException): CancellationResult = {
@@ -62,7 +92,7 @@ class FutureScopeContext(ec: ExecutionContext, parentScope: Option[FutureScopeCo
       r
 
     def childWaits(): Future[Unit] = 
-      val cit = cancellables.elements().nn
+      val cit = cancellableFutures.elements().nn
       var r = Future successful ()
       while(cit.hasMoreElements) {
         val c = cit.nextElement.nn
@@ -75,20 +105,21 @@ class FutureScopeContext(ec: ExecutionContext, parentScope: Option[FutureScopeCo
     
 
     if (stateRef.compareAndSet(FutureScopeContext.State.Active,FutureScopeContext.State.Cancelling(ex))) then
+      
       val finish = nonCancellableWaits().transformWith(_ =>
                       childWaits().transformWith( _ =>
                          finishPromise.completeWith(runFinishCallbacks()).future
                       )  
                    )
       if (finish.isCompleted) then 
-        stateRef.set(FutureScopeContext.State.Finished)
+        stateRef.set(FutureScopeContext.State.Cancelled(ex))
         CancellationResult.Cancelled
       else 
         finish.onComplete{ _ =>
-          stateRef.set(FutureScopeContext.State.Finished)
+          stateRef.set(FutureScopeContext.State.Cancelled(ex))
         }    
         CancellationResult.Cancelling(finish)
-    else if (stateRef.get().nn.isInstanceOf[CancellationResult.Cancelling]) then  
+    else if (stateRef.get().nn.isInstanceOf[FutureScopeContext.State.Cancelling]) then  
       if (finishPromise.future.isCompleted) then
         CancellationResult.AlreadyFinished
       else
@@ -99,26 +130,85 @@ class FutureScopeContext(ec: ExecutionContext, parentScope: Option[FutureScopeCo
 
 
   
-  def spawn[A](f: FutureScopeContext ?=> A, executionContext: ExecutionContext = ec): Future[A] = 
-    spawnAsync( ctx =>  Future successful f(using ctx), executionContext)
+  def spawn[A](f: FutureScopeContext ?=> A, executionContext: ExecutionContext = ec): CancellableFuture[A] = 
+    spawn_async( ctx =>  Future successful f(using ctx), executionContext)
+    
+    
+  def spawnAsync[A](f: FutureScopeContext ?=> Future[A], executionContext: ExecutionContext = ec): CancellableFuture[A] = {
+    spawn_async((ctx) => f(using ctx), executionContext )
+  }
 
-
-  def spawnAsync[A](f: FutureScopeContext => Future[A], executionContext: ExecutionContext = ec): Future[A] = {
+  def spawn_async[A](f: FutureScopeContext => Future[A], executionContext: ExecutionContext = ec): CancellableFuture[A] = {
     given ExecutionContext = executionContext
     stateRef.get() match
       case FutureScopeContext.State.Active =>
         val c = new FutureScopeContext(executionContext, Some(this))
         val p = Promise[A]()
         p.completeWith(c.run(f))
-        addCancellable(FutureScopeContext.ChildRecord(c,p))
-        p.future
+        val childRecord = DelegatedCancellableFuture(p.future,
+           (ex) => {
+               p.tryFailure(ex) 
+               c.cancel(ex) 
+           }
+        )
+        addCancellableFuture(childRecord)
+        childRecord
       case _ =>
         throw new IllegalStateException("f is already cancelling")
   }
 
+  def spawnDelay(duration: FiniteDuration): CancellableFuture[FiniteDuration] = {
+    val retval = TimeOperations.waiting(duration)(duration)
+    addCancellableFuture(retval)
+    retval
+  }
 
-  def addCancellable(c: Cancellable): Unit = {
-      cancellables.put(c,c)
+  def spawnTimeout(duration: FiniteDuration): CancellableFuture[Nothing] = {
+    val retval = TimeOperations.waiting(duration){
+      throw TimeoutException()
+    }
+    addCancellableFuture(retval)
+    retval
+  }
+
+
+
+  /**
+   * join will be finished after finish of all childs of this context
+   **/
+  transparent inline def join(): Unit = {
+    // we assume here, that finishPromise.future is stable
+    given ExecutionContext = ec
+    given FutureScopeContext = this
+    await(finishPromise.future) 
+  }
+
+
+  def timedAwaitAsync[A](fa: Future[A], timeout: FiniteDuration): Future[A] = {
+    val p = Promise[A]()
+    val retval = TimeOperations.waiting(timeout){
+        p.tryFailure(TimeoutException())
+    }
+    addCancellableFuture(retval)
+    p.completeWith(fa)
+    p.future
+  }
+
+  def timedAwaitCompletedAsync[A](fa: Future[A], timeout: FiniteDuration): Future[Boolean] = {
+    given ExecutionContext = executionContext
+    val p = Promise[Boolean]
+    val retval = TimeOperations.waiting(timeout){
+        p.trySuccess(false)
+    }
+    addCancellableFuture(retval)
+    fa.onComplete(_ => p.trySuccess(true))
+    p.future
+  }
+
+
+
+  private def addCancellableFuture[A](c: CancellableFuture[A]): Unit = {
+      cancellableFutures.put(c,c)
   } 
 
 
@@ -132,32 +222,60 @@ class FutureScopeContext(ec: ExecutionContext, parentScope: Option[FutureScopeCo
   
   private[futureScope] def run[A](f: FutureScopeContext => Future[A]): Future[A] = {
       given ExecutionContext = ec
-      f(this).transformWith{ v =>
+
+      def handleEscalation(ex:Throwable): Throwable = {
+            ex match
+              case NoEscalateExceptionWrapper(wrapped) =>
+                wrapped
+              case uhex:UnhandledExceptionInChildScope =>
+                parentScope.foreach(_.cancel(uhex))
+                ex
+              case scex: ScopeCancellationException =>
+                // don't touch parent scope for other cancellation exceptions
+                ex  
+              case _ =>
+                parentScope.foreach{ scope =>
+                  val uhex = UnhandledExceptionInChildScope(ex, this)
+                  val r = scope.cancel(uhex)
+                }
+                ex
+      }
+        
+      def afterFinalizer(v:Try[A],finish:Future[Unit]): Future[A] = {
+        v match
+          case Success(r) => finish.map(_ => r)
+          case Failure(ex) =>
+            val nex = handleEscalation(ex)
+            finish.transform{
+              case Success(_) => Failure(nex)
+              case Failure(finEx) => nex.addSuppressed(finEx)
+                                     Failure(nex)
+            }
+      }
+
+      val fThis = try{
+        f(this)
+      }catch{
+        case NonFatal(ex) => 
+          Future failed ex
+      }
+      fThis.transformWith{ v =>
           stateRef.get match
               case FutureScopeContext.State.Active =>
-                   cancel(ScopeFinished()) match
+                  cancel(ScopeFinished()) match
                     case CancellationResult.Cancelling(finishing) =>
-                        transformSuppressed(v,finishing)
+                      afterFinalizer(v, finishing)
                     case _ =>
-                        Future.fromTry(v)    
+                      v match
+                        case Success(r) => Future successful r
+                        case Failure(ex) =>
+                          val nex = handleEscalation(ex)
+                          Future failed nex
               case _ =>
-                   transformSuppressed(v,finishPromise.future)
+                   afterFinalizer(v, finishPromise.future)
       }
   }
 
-  //TODO: move to util
-  private def transformSuppressed[A](ta: Try[A], fu: Future[Unit])(using ExecutionContext): Future[A] =
-    fu.transform(tu => attachSuppressed(ta,tu))
- 
-  private def attachSuppressed[A](ta: Try[A], tu:Try[Unit]): Try[A] =
-    tu match
-      case Success(_) => ta
-      case r@Failure(eu) =>
-        ta match
-          case Success(_) => Failure(eu)
-          case r@Failure(ea) => ea.addSuppressed(eu)
-                                r 
- 
 
   private[futureScope] def runFinishCallbacks(): Future[Unit] = 
     given ExecutionContext = ec
@@ -190,13 +308,10 @@ object FutureScopeContext {
       case Finished extends State(StateFlags.Finished)  
 
       def isActive = (flags & StateFlags.Active) != 0
+      def isFinished = (flags & StateFlags.Finished) != 0
 
    end State 
 
-   case class ChildRecord[A](ctx: FutureScopeContext, promise: Promise[A]) extends Cancellable:
-      def cancel(ex: ScopeCancellationException): CancellationResult =
-        promise.tryFailure(ex)
-        ctx.cancel(ex) 
 
 }
 

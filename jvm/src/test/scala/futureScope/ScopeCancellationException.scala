@@ -1,9 +1,7 @@
 package futureScope
 
-class ScopeCancellationException(message:String = "cancel", ex: Throwable|Null = null) extends RuntimeException(message) {
 
-   if ex != null then
-      initCause(ex)
+class ScopeCancellationException(message:String = "cancel", ex: Throwable|Null = null) extends RuntimeException(message, ex) {
 
 }
 
@@ -23,4 +21,6 @@ object ScopeFinished {
     true
 
 }
+
+case class UnhandledExceptionInChildScope(ex: Throwable, scope: FutureScopeContext) extends ScopeCancellationException(s"Unhandled exception in child scope: ${ex.getMessage}", ex)
 
