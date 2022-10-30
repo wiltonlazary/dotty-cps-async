@@ -1,4 +1,4 @@
-package cps.macros.forest
+package cps.macros.common
 
 import scala.quoted._
 
@@ -8,35 +8,6 @@ import cps.macros.misc._
 
 
 object TransformUtil:
-
-
-  def find(using Quotes)(term: quotes.reflect.Tree,
-                       cond: quotes.reflect.Tree=> Option[quotes.reflect.Tree]) :Option[quotes.reflect.Tree] = {
-     import quotes.reflect._
-     import util._
-     val search = new TreeAccumulator[Option[Tree]] {
-
-        def foldTree(x: Option[Tree], tree: Tree)(owner: Symbol): Option[Tree] =
-                 foldOverTree(x,tree)(owner)
-
-        override def foldOverTree(x: Option[Tree], tree: Tree)(owner: Symbol): Option[Tree] = {
-           if (x.isDefined)
-             x
-           else
-             cond(tree) orElse super.foldOverTree(x,tree)(owner)
-        }
-     }
-     search.foldTree(None,term)(Symbol.spliceOwner)
-  }
-
-  def containsAwait(using Quotes)(term: quotes.reflect.Term): Boolean =
-    import quotes.reflect._
-    find(term, {
-           case v@Apply(TypeApply(id@Ident("await"),targs),args) =>
-                         if (id.symbol.fullName == "cps.await") Some(v) else None
-           case _ => None
-         }).isDefined
-
 
 
   def createFunctionType(using Quotes)(argTypes: List[quotes.reflect.TypeRepr], 
@@ -58,11 +29,18 @@ object TransformUtil:
     //def lookupParamTerm(sym: Symbol): Option[Term] =
     //      paramsMap.get(sym).map(i => Ref(indexedArgs(i).symbol))
     val assoc: Map[Symbol, Tree] = paramsMap.map((k,i) => (k, Ref(indexedArgs(i).symbol)))
-    changeSyms(assoc, body, owner)
+    changeSymsInTerm(assoc, body, owner)
 
-  def changeSyms(using qctx:Quotes)(association: Map[qctx.reflect.Symbol,qctx.reflect.Tree], 
-                                    body: quotes.reflect.Term, 
-                                    owner: quotes.reflect.Symbol): quotes.reflect.Term =
+  def changeSymsInTerm(using Quotes)(association: Map[quotes.reflect.Symbol,quotes.reflect.Tree], 
+                                    body: quotes.reflect.Term,
+                                    owner: quotes.reflect.Symbol 
+                                    ): quotes.reflect.Term = {
+     changeSymsInTree(association,body,owner).asInstanceOf[quotes.reflect.Term]
+  }
+
+  def changeSymsInTree(using qctx:Quotes)(association: Map[qctx.reflect.Symbol,qctx.reflect.Tree], 
+                                    body: quotes.reflect.Tree, 
+                                    owner: quotes.reflect.Symbol): quotes.reflect.Tree =
     import quotes.reflect._
 
     // TODO: mege wirh changeSyms
@@ -147,7 +125,7 @@ object TransformUtil:
                  case _ => tp
 
     }
-    argTransformer.transformTerm(body)(owner)
+    argTransformer.transformTree(body)(owner)
 
   /**
    * widen, which works over 'or' and 'and' types.
@@ -247,5 +225,56 @@ object TransformUtil:
       case other =>
         other.changeOwner(owner)
 
+
+  def prependStatementToBlock(using Quotes)(st: quotes.reflect.Statement, block: quotes.reflect.Block ): quotes.reflect.Block = {
+    import quotes.reflect.*
+    block match
+      case lambda@Lambda(params,body) =>
+        Block(st::Nil, lambda)
+      case _ =>  
+        block.expr match
+          case Closure(_,_) => 
+            Block(st::Nil, block)
+          case _ =>
+            Block(st::block.statements, block.expr)
+  }
+
+  def prependStatementsToBlock(using Quotes)(sts: List[quotes.reflect.Statement], block: quotes.reflect.Block ): quotes.reflect.Block = {
+    import quotes.reflect.*
+    block.expr match
+      case Closure(_,_) => 
+         Block(sts, block)
+      case _ =>
+         Block(sts ++: block.statements, block.expr)
+  }
      
+  def inMonadOrChild[F[_]:Type](using Quotes)(te: quotes.reflect.TypeRepr): Option[quotes.reflect.TypeRepr] = {
+      import quotes.reflect.*
+      te.widen.asType match
+        case '[ F[r] ] =>
+          Some(TypeRepr.of[r])
+        case _ =>
+          val bc = te.baseClasses
+          if (bc.isEmpty) then None
+          else
+            TypeRepr.of[F].classSymbol.flatMap(fs =>
+              if (bc.contains(fs)) {
+                Some(te.baseType(fs))
+              } else {
+                // TODO: search up, add tracking  F-bound to prevent infinite loop.
+                None
+              }
+          )                
+  }  
+
+  def prependStatementsToTerm(using Quotes)(statements: List[quotes.reflect.Statement], term: quotes.reflect.Term): quotes.reflect.Block = {
+    import quotes.reflect.*
+    term match
+      case lambda@Lambda(_,_) =>
+        Block(statements, lambda)
+      case block@Block(_,_) =>
+        prependStatementsToBlock(statements, block)
+      case _ =>
+        Block(statements, term)     
+  }
 

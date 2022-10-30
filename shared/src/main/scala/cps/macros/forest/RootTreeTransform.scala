@@ -7,6 +7,7 @@ import scala.util.control.NonFatal
 
 import cps._
 import cps.macros._
+import cps.macros.common._
 import cps.macros.misc._
 
 
@@ -75,7 +76,8 @@ trait RootTreeTransform[F[_], CT, CC <: CpsMonadContext[F] ]:
                                      case NonFatal(ex) => term.toString
                                   }
                                   println(s"can't translate tree: ${termShowed}" )
-                                  e.printStackTrace()
+                                  if (cpsCtx.flags.debugLevel > 0) then
+                                     e.printStackTrace()
                                   throw e.copy(printed=true);
                                 else
                                   throw e

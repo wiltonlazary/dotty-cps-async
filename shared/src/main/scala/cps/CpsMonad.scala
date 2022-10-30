@@ -1,7 +1,7 @@
 /*
  * dotty-cps-async: https://github.com/rssh/dotty-cps-async
  *
- * (C) Ruslan Shevchenko <ruslan@shevchenko.kiev.ua>, Kyiv, 2020, 2021
+ * (C) Ruslan Shevchenko <ruslan@shevchenko.kiev.ua>, Kyiv, 2020, 2021, 2022
  */
 package cps
 
@@ -45,6 +45,15 @@ trait CpsMonad[F[_]] extends CpsAwaitable[F] {
     **/
    def apply[T](op: Context => F[T]): F[T] 
 
+   /**
+    * Lazy variant of pure, which by default -
+    *  create monadic expression according to the 
+    *  choosen monad types.
+    *  (i.e. delaing for effect monads,  
+    *    starting for eager monand, pure by defiault)
+    **/
+   def lazyPure[T](op: =>T):F[T] =
+      map(pure(())){ _ => op}
 
 }
 
@@ -119,9 +128,9 @@ trait CpsTryMonad[F[_]] extends CpsMonad[F] {
        catch
          case NonFatal(ex) =>
            r match
-             case Success(_) => error(ex)
-             case Failure(mEx) => mEx.addSuppressed(ex)
-                                error(mEx)
+             case Failure(mEx) => ex.addSuppressed(mEx)
+             case _ => 
+           error(ex)
     }
 
 
@@ -144,18 +153,18 @@ trait CpsTryMonad[F[_]] extends CpsMonad[F] {
              case Success(_) => fromTry(ra)
              case Failure(raaex) =>
                    ra match
-                     case Success(rav) => error(raaex)
+                     case Success(rav) =>
                      case Failure(raex) =>
-                            raex.addSuppressed(raaex)
-                            error(raex)
+                            raaex.addSuppressed(raex)
+                   error(raaex)
          }
        catch
          case NonFatal(ex) =>
            ra match
-             case Success(_) => error(ex)
              case Failure(raex) =>
-                   raex.addSuppressed(ex)
-                   error(raex)
+                   ex.addSuppressed(raex)
+             case Success(_) => 
+           error(ex)
     }
   
 
@@ -267,6 +276,12 @@ trait CpsEffectMonad[F[_]] extends CpsMonad[F] {
     **/
    def flatDelay[T](x: => F[T]):F[T] = flatMap(delayedUnit)(_ => x)
 
+   /**
+    * synonim for delay
+    **/
+   override def lazyPure[T](op: =>T):F[T] =
+      delay(op)
+
 }
 
 
@@ -365,12 +380,20 @@ trait CpsConcurrentEffectMonad[F[_]] extends CpsConcurrentMonad[F] with CpsAsync
  **/
 trait CpsSchedulingMonad[F[_]] extends CpsConcurrentMonad[F] {
 
+    /**
+    * schedule execution of op somewhere, immediatly.
+    * Note, that characteristics of scheduler can vary.
+    * TODO: rename to spawn until we not stabilized
+    **/
+   def spawnSync[A](op: => A): F[A] =
+      spawn( pure(op) )
 
    /**
     * schedule execution of op somewhere, immediatly.
     * Note, that characteristics of scheduler can vary.
     **/
    def spawn[A](op: => F[A]): F[A]
+
 
    /***
     * In eager monad, spawned process can be represented by F[_]
@@ -388,6 +411,12 @@ trait CpsSchedulingMonad[F[_]] extends CpsConcurrentMonad[F] {
     **/      
    def join[A](op: Spawned[A]): F[A] = op
 
+
+   /**
+    * spawnSync
+    **/
+   override def lazyPure[T](op: =>T): F[T] =
+      spawnSync(op)
          
 }
 

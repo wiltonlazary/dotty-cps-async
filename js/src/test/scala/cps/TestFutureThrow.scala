@@ -16,6 +16,8 @@ import scala.util.Try
 import java.util.Timer
 import java.util.TimerTask
 
+import cps.testconfig.given
+
 class TestFutureThrow :
 
   import scala.concurrent.ExecutionContext.Implicits.global 

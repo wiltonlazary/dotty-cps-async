@@ -13,6 +13,7 @@ import futureScope.*
 import cps.*
 import cps.monads.{*,given}
 import cps.util.FutureCompleter
+import cps.testconfig.given
 
 import org.junit.{Test,Ignore}
 import org.junit.Assert.*
@@ -61,6 +62,7 @@ class TestTenUrls {
         val first10 = await(TenUrls.readFirstN(mockApi,urls,10))
         assert(first10.length == 10)
       }
+      //Await.ready(f)
       FutureCompleter(f)
     }
 
@@ -81,10 +83,19 @@ class TestTenUrls {
       val mockApi = NetworkApiMock(urlsData)
       val urls = urlsData.keys.toList
       val f = async[Future].in(Scope) {
-        val first10 = await(TenUrls.readFirstN(mockApi,urls,10))
-        assert(first10.length == 10)
+          FutureScope.spawnTimeout(5.seconds)
+          val first10 = await(TenUrls.readFirstN(mockApi,urls,10))
+          assert(first10.length == 10)
       }
-      FutureCompleter(f)
+      FutureCompleter(f.transform{
+        case Success(x) => Success(x)
+        case Failure(ex: TimeoutException) =>
+           val nInfinite = urlsData.filter(_._2 == FetchResult.InfiniteWait).size
+           println(s"nInfinite=${nInfinite}")
+           assert(nInfinite > 90)
+           Success(())
+        case Failure(ex) => Failure(ex)
+      })
     }
 
  

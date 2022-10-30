@@ -7,7 +7,9 @@ import futureScope.*
 
 import cps.*
 import cps.monads.{*,given}
+import cps.testconfig.given
 import cps.util.FutureCompleter
+
 
 import org.junit.{Test,Ignore}
 import org.junit.Assert.*
@@ -22,6 +24,7 @@ class TestExceptionPropagation {
 
       FutureScope.spawn[Unit]{
         // give time for second process to spawn
+        //println("testExceptionPropagation: before await")
         await(FutureScope.spawnDelay(10.milliseconds))
         throw new RuntimeException("exception:p1")
         () // TODO: problem ij cps-transform..
@@ -37,6 +40,9 @@ class TestExceptionPropagation {
       case Failure(ex) => 
            //println(s"message:${ex.getMessage()}")
            //ex.printStackTrace()
+           if (!ex.getMessage().nn.contains("exception:p1")) then
+              println(s"here will be asset false, message:${ex.getMessage()}")
+              ex.printStackTrace()
            assert(ex.getMessage().nn.contains("exception:p1"))
            Success(true)
       case Success(_) =>

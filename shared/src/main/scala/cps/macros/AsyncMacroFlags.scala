@@ -11,20 +11,24 @@ case class AsyncMacroFlags(
    customValueDiscard: Boolean = false,
    warnValueDiscard: Boolean = true,
    automaticColoring: Boolean = false,
-   muted: Boolean = false
+   muted: Boolean = false,
+   useLoomAwait: Boolean = false
 )
 
-given FromExpr[AsyncMacroFlags] with
+object AsyncMacroFlags:
 
-   def unapply(v: Expr[AsyncMacroFlags])(using Quotes): Option[AsyncMacroFlags] =
-     v match
-       case '{ AsyncMacroFlags(${Expr(printCode)},${Expr(printTree)},
+   given FromExpr[AsyncMacroFlags] with
+
+      def unapply(v: Expr[AsyncMacroFlags])(using Quotes): Option[AsyncMacroFlags] =
+         v match
+            case '{ AsyncMacroFlags(${Expr(printCode)},${Expr(printTree)},
                                ${Expr(debugLevel)},
                                ${Expr(allowShiftedLambda)}, 
                                ${Expr(customValueDiscard)},
                                ${Expr(warnValueDiscard)}, 
                                ${Expr(automaticColoring)},
-                               ${Expr(eMuted)}
+                               ${Expr(eMuted)},
+                               ${Expr(useLoomAwait)}
                               ) 
                            } =>
                Some(AsyncMacroFlags(printCode, printTree,
@@ -34,7 +38,11 @@ given FromExpr[AsyncMacroFlags] with
                        warnValueDiscard,
                        automaticColoring,
                        eMuted,
+                       useLoomAwait
                    ))
-       case _ => None
+            case _ => None
+
+end AsyncMacroFlags
+
 
 

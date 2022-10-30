@@ -1,9 +1,9 @@
 //val dottyVersion = "3.0.2-RC1-bin-SNAPSHOT"
 //val dottyVersion = "3.1.2-RC1-bin-SNAPSHOT"
-val dottyVersion = "3.1.3"
-//val dottyVersion = "3.1.1"
+val dottyVersion = "3.2.1"
+//val dottyVersion = "3.1.3"
 
-ThisBuild/version := "0.9.10-SNAPSHOT"
+ThisBuild/version := "0.9.12-SNAPSHOT"
 ThisBuild/versionScheme := Some("semver-spec")
 ThisBuild/resolvers += Opts.resolver.sonatypeSnapshots
 
@@ -40,7 +40,9 @@ lazy val cps = crossProject(JSPlatform, JVMPlatform, NativePlatform)
     .jvmSettings(
         scalacOptions ++= Seq( "-Yexplicit-nulls",
                             "-unchecked", "-Ydebug-trace", "-Ydebug-names", "-Xprint-types", 
-                            "-Ydebug", "-uniqid", "-Xcheck-macros", "-Ycheck:macro", "-Yprint-syms", "-explain"  ),
+                            "-Ydebug", "-uniqid", "-Xcheck-macros", "-Ycheck:macro", "-Yprint-syms", 
+                            "-Ysafe-init"
+                             ),
                              // -explain
                              // -Ydebug-error
                              // -Ydebug-tree-with-id -1
@@ -48,7 +50,7 @@ lazy val cps = crossProject(JSPlatform, JVMPlatform, NativePlatform)
                 "-source-links:shared=github://rssh/dotty-cps-async/master#shared",
                 "-source-links:jvm=github://rssh/dotty-cps-async/master#jvm"),
         libraryDependencies += "com.novocode" % "junit-interface" % "0.11" % "test",
-        mimaPreviousArtifacts := Set("com.github.rssh" %% "dotty-cps-async" % "0.9.8")
+        mimaPreviousArtifacts := Set("com.github.rssh" %% "dotty-cps-async" % "0.9.9")
     ).jsSettings(
         scalaJSUseMainModuleInitializer := true,
         Compile / doc / scalacOptions := Seq("-groups",  
@@ -57,7 +59,7 @@ lazy val cps = crossProject(JSPlatform, JVMPlatform, NativePlatform)
         libraryDependencies += ("org.scala-js" %% "scalajs-junit-test-runtime" % "1.8.0" % Test).cross(CrossVersion.for3Use2_13),
         mimaFailOnNoPrevious := false
     ).nativeSettings(
-        scalaVersion := "3.1.2",
+        //scalaVersion := "3.1.2",
         libraryDependencies += "org.scala-native" %%% "junit-runtime" % nativeVersion % Test,
         libraryDependencies += "com.github.lolgab" %%% "native-loop-core" % "0.2.1" % Test,
         addCompilerPlugin("org.scala-native" % "junit-plugin" % nativeVersion cross CrossVersion.full) 
@@ -68,3 +70,32 @@ lazy val CpsJVM = config("cps.jvm")
 lazy val CpsJS = config("cps.js")
 //lazy val CpsNative = config("cps.native")
 lazy val Root = config("root")
+
+lazy val cpsLoomJVM = project.in(file("jvm-loom"))
+                      .dependsOn(cps.jvm)
+                      .settings(sharedSettings)
+                      .settings(name := "dotty-cps-async-loom-test")
+                      .settings(
+                        // TODO: remove sources, add dependency from java
+                        //Compile / unmanagedSourceDirectories ++= Seq(
+                        //     baseDirectory.value / ".." / "jvm" / "src" / "main" / "scala",
+                        //     baseDirectory.value / ".." / "shared" / "src" / "main" / "scala",
+                        //),
+                        Compile / unmanagedSourceDirectories := Seq(),
+                        Test / unmanagedSourceDirectories ++= Seq(
+                             baseDirectory.value / ".." / "jvm" / "src" / "test" / "scala",
+                             baseDirectory.value / ".." / "shared" / "src" / "test" / "scala",
+                        ),
+                        libraryDependencies += "com.novocode" % "junit-interface" % "0.11" % "test",
+                        Test/fork := true,
+                        //for macos
+                        Test/javaHome := Some(file("/Library/Java/JavaVirtualMachines/jdk-19.jdk/Contents/Home/")),
+                        //for linux:
+                        //Test/javaHome := Some(file("/usr/lib/jvm/jdk-19")),
+
+                        Test/javaOptions ++= Seq(
+                           "--enable-preview", 
+                           "--add-modules", "jdk.incubator.concurrent"
+                        )
+                      )
+

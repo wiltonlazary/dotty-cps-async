@@ -4,7 +4,9 @@ import scala.collection.immutable.Queue
 import scala.quoted._
 import cps._
 import cps.macros._
+import cps.macros.common._
 import cps.macros.misc._
+import cps.macros.forest.application.ApplicationShiftType
 
 
 
@@ -96,8 +98,8 @@ trait CpsTreeScope[F[_], CT, CC<:CpsMonadContext[F]] {
                        } catch {
                          case ex: Exception =>
                             println(s"Exception during sealing to F[T], T=${TypeRepr.of[T].show}, otpe=${candidate.tpe}")
-                            println(s"CpsTree.getClass ${candidate.getClass}")
-                            ex.printStackTrace()
+                            println(s"CpsTree.getClass ${this.getClass}")
+                            println(s"candidate = $candidate")
                             throw ex;
                        }
                     else
@@ -608,7 +610,7 @@ trait CpsTreeScope[F[_], CT, CC<:CpsMonadContext[F]] {
     def appendValDefToNextTerm(valDef: ValDef, next:Term): Term =
        next.changeOwner(valDef.symbol.owner) match
          case x@Lambda(params,term) => Block(List(valDef), x)
-         case Block(stats, last) => Block(valDef::stats, last)
+         case block@Block(stats, last) => TransformUtil.prependStatementToBlock(valDef,block)
          case other => Block(List(valDef), other)
 
     def inCake[F1[_],T1,C1<:CpsMonadContext[F1]](otherScope: TreeTransformScope[F1,T1,C1]): otherScope.ValCpsTree =
@@ -643,19 +645,20 @@ trait CpsTreeScope[F[_], CT, CC<:CpsMonadContext[F]] {
        for{ x <- frs.syncOrigin
             y <- snd.syncOrigin
           } yield {
-            x match
+            val r = x match
               case Block(xStats, xLast) =>
                 y match
-                  case Block(yStats, yLast) =>
-                    Block((xStats :+ xLast) ++ yStats, yLast).changeOwner(Symbol.spliceOwner)
+                  case yBlock@Block(yStats, yLast) =>
+                    TransformUtil.prependStatementsToBlock(xStats :+ xLast, yBlock)
                   case yOther =>
-                    Block(xStats :+ xLast, yOther).changeOwner(Symbol.spliceOwner)
+                    Block(xStats :+ xLast, yOther)
               case xOther =>
                 y match
-                  case Block(yStats, yLast) =>
-                    Block(xOther::yStats, yLast).changeOwner(Symbol.spliceOwner)
+                  case yBlock@Block(yStats, yLast) =>
+                    TransformUtil.prependStatementToBlock(xOther, yBlock)
                   case yOther =>
-                    Block(xOther::Nil, yOther).changeOwner(Symbol.spliceOwner)
+                    Block(xOther::Nil, yOther)
+            r.changeOwner(Symbol.spliceOwner)
           }
     }
 
@@ -682,13 +685,13 @@ trait CpsTreeScope[F[_], CT, CC<:CpsMonadContext[F]] {
 
     override def inCake[F1[_],T1,C1<:CpsMonadContext[F1]](otherScope: TreeTransformScope[F1,T1,C1]): otherScope.AppendCpsTree =
          otherScope.AppendCpsTree(frs.inCake(otherScope), snd.inCake(otherScope))
-
+ 
   end AppendCpsTree
 
   case class AsyncLambdaCpsTree(originLambda: Term,
                                 params: List[ValDef],
                                 body: CpsTree,
-                                otpe: TypeRepr ) extends CpsTree:
+                                otpe: TypeRepr) extends CpsTree:
 
     override def isAsync = true
 
@@ -725,7 +728,7 @@ trait CpsTreeScope[F[_], CT, CC<:CpsMonadContext[F]] {
     def rLambda: Term =
       val paramNames = params.map(_.name)
       val paramTypes = params.map(_.tpt.tpe)
-      val shiftedType = shiftedMethodType(paramNames, paramTypes, body.otpe.asInstanceOf[TypeRepr])
+      val shiftedType = cpsShiftedMethodType(paramNames, paramTypes, body.otpe.asInstanceOf[TypeRepr])
        // TODO: think, maybe exists case, where we need substitute Ident(param) for x[i] (?)
        //       because otherwise it's quite strange why we have such interface in compiler
 

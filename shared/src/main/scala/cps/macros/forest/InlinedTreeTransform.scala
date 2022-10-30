@@ -1,11 +1,12 @@
 // CPS Transform for tasty inlined
-// (C) Ruslan Shevchenko <ruslan@shevchenko.kiev.ua>, 2019, 2020, 2021
+// (C) Ruslan Shevchenko <ruslan@shevchenko.kiev.ua>, 2019, 2020, 2021, 2022
 package cps.macros.forest
 
 import scala.quoted._
 
 import cps._
 import cps.macros._
+import cps.macros.common._
 import cps.macros.misc._
 import scala.collection.immutable.HashMap
 
@@ -86,8 +87,6 @@ trait InlinedTreeTransform[F[_], CT, CC<:CpsMonadContext[F]]:
                       } catch {
                          case ex: MacroError =>
                            report.warning(s"error during transformation of valdef in inline, tpt=${tpt.show}\n, rhs=${rhs.show}\n, ex=${ex}", posExprs(rhs))
-                           println("AAA:stdout")
-                           ex.printStackTrace(System.err)
                            throw ex
                       }
                     cpsRhs.syncOrigin match
@@ -219,7 +218,8 @@ trait InlinedTreeTransform[F[_], CT, CC<:CpsMonadContext[F]]:
     val body  = 
       if (!awaitVals.isEmpty) {
              bodyWithoutAwaits.changeOwner(Symbol.spliceOwner) match
-                 case Block(statements, last) => Block(awaitVals ++ statements, last)
+                 case block@Block(statements, last) => 
+                     TransformUtil.prependStatementsToBlock(awaitVals,block)
                  case other => Block(awaitVals, other)
       } else 
              bodyWithoutAwaits 

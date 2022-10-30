@@ -19,6 +19,10 @@ class FutureContext(m: FutureAsyncMonadAPI) extends CpsMonadNoAdoptContext[Futur
 
    def executionContext = m.executionContext
 
+   def submit[A](a: Future[A]):Unit = {
+     // do nothing, since future now evaluated.
+   }
+
 }
 
 
@@ -30,6 +34,8 @@ class FutureAsyncMonadAPI(using ExecutionContext) extends CpsSchedulingMonad[Fut
    type F[+T] = Future[T]
 
    override type WF[T] = F[T]
+
+   type Context = FutureContext
 
    def pure[T](t:T):Future[T] = Future.successful(t)
 
@@ -59,6 +65,7 @@ class FutureAsyncMonadAPI(using ExecutionContext) extends CpsSchedulingMonad[Fut
 
    def spawn[A](op: => F[A]): F[A] =
         val p = Promise[A]
+        //TODO: if loom enabled, ensure that we in loom thread
         summon[ExecutionContext].execute{ 
           () => 
               try
