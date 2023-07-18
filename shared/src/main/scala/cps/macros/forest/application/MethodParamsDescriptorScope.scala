@@ -1,11 +1,12 @@
 package cps.macros.forest.application
 
-import scala.quoted._
+import scala.quoted.*
+import cps.*
+import cps.macros.*
+import cps.macros.forest.*
+import cps.macros.misc.*
 
-import cps._
-import cps.macros._
-import cps.macros.forest._
-import cps.macros.misc._
+import scala.annotation.experimental
 
 
 trait MethodParamsDescriptorScope[F[_], CT, CC<:CpsMonadContext[F]]:
@@ -24,6 +25,18 @@ trait MethodParamsDescriptorScope[F[_], CT, CC<:CpsMonadContext[F]]:
 
      def  paramType(index: Int): Option[TypeRepr]
 
+     def  isContext: Boolean
+
+
+     def  isCpsDirect(index:Int): Boolean =
+            isContext && (
+              paramType(index) match
+                case Some(t) =>
+                  t.derivesFrom(Symbol.requiredClass("cps.CpsDirect"))
+                  //t <:< TypeRepr.of[CpsDirect[F]]
+                case None => false
+            )
+
      def  isByName(index: Int): Boolean =
            paramType(index) match
              case Some(ByNameType(_)) => true
@@ -34,7 +47,7 @@ trait MethodParamsDescriptorScope[F[_], CT, CC<:CpsMonadContext[F]]:
 
      def  apply(fun: Term): MethodParamsDescriptor =
        fun.tpe.widen.dealias match
-         case mt@MethodType(_,_,_) =>
+         case mt: MethodType =>
                    MethodTypeBasedParamsDescriptor(mt)
          case other =>
                    report.warning(s"apply to non-method, tpe=${fun.tpe}",posExpr(fun))
@@ -52,6 +65,10 @@ trait MethodParamsDescriptorScope[F[_], CT, CC<:CpsMonadContext[F]]:
        else
          None
 
+     override def isContext: Boolean = {
+       mt.isImplicit
+     }
+
      override def  paramType(index: Int): Option[TypeRepr] =
        if (index >= 0 && index < paramTypes.size)
          Some(paramTypes(index))
@@ -68,6 +85,8 @@ trait MethodParamsDescriptorScope[F[_], CT, CC<:CpsMonadContext[F]]:
      override def  paramIndex(name: String): Option[Int] = None
      override def  paramName(index: Int): Option[String] = None
      override def  paramType(index: Int): Option[TypeRepr] = None
+     override def  isContext: Boolean = false
+
 
 
   object DynaminParamsDescriptor extends MethodParamsDescriptor:
@@ -77,5 +96,6 @@ trait MethodParamsDescriptorScope[F[_], CT, CC<:CpsMonadContext[F]]:
 
      override def  paramName(index: Int): Option[String] =  Some(index.toString)
      override def  paramType(index: Int): Option[TypeRepr] = Some(TypeRepr.of[Any])
+     override def  isContext: Boolean = false
 
 

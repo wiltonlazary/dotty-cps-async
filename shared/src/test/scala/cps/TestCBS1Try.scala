@@ -151,9 +151,12 @@ class TestСBS1Try:
      }
      val r = c.run()
      assert(r.isFailure)
-     val Failure(ex) = r
-     assert(ex.getMessage == "BBB")
-     assert(x == 2)
+     r match
+       case Failure(ex) =>
+         assert(ex.getMessage == "BBB")
+         assert(x == 2)
+       case _ =>
+         assert(false)
 
 
   @Test def tryAsyncInFinalizer(): Unit = 
@@ -220,6 +223,30 @@ class TestСBS1Try:
      val r = c.run()
      assert(r.isFailure)
      assert( wasInCatch )
+
+  class Ex1 extends RuntimeException("Ex1")
+  class Ex2 extends RuntimeException("Ex2")
+
+  @Test def tryThrowingOther(): Unit = {
+      val c = async {
+         try {
+            await(T1.cbi(2))
+            if true then
+               throw Ex2()
+         }catch{
+            case ex: Ex1 => 1 
+         }
+         2
+      }
+      val r = c.run()
+      assert(r.isFailure)
+      r match
+        case Failure(ex) =>
+          assert(ex.isInstanceOf[Ex2])
+        case _ =>
+          assert(false)
+  }
+     
 
 
 

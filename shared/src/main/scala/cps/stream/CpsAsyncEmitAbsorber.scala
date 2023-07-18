@@ -1,16 +1,16 @@
 package cps.stream
 
-import scala.util._
+import scala.util.*
 import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.CancellationException
-import java.util.concurrent.atomic._
-
-import scala.quoted._
-import scala.concurrent._
-
-import cps.{*,given}
+import java.util.concurrent.atomic.*
+import scala.quoted.*
+import scala.concurrent.*
+import cps.{*, given}
 import cps.macros.common.*
+import cps.macros.flags.UseCompilerPlugin
 import cps.macros.misc.*
+import cps.plugin.*
 
 
 /**
@@ -54,9 +54,9 @@ trait CpsAsyncEmitAbsorber4[R, F[_], C<:CpsMonadContext[F], T](using val auxAsyn
    override type Context = C
 
 
-class AsyncStreamHelper[R,F[_],C<:CpsMonadContext[F],A](a: CpsAsyncEmitAbsorber.Aux[R,F,C,A]){
+//TODO: fill bug report for dotty, about error in -Xcheck-macros when a is not val
+class AsyncStreamHelper[R,F[_],C<:CpsMonadContext[F],A](val a: CpsAsyncEmitAbsorber.Aux[R,F,C,A]){
 
-    
     transparent inline def apply(inline f: C ?=> CpsAsyncEmitter[F,A] => Unit): R = ${
          CpsAsyncStreamMacro.transform[R,F,C,A]('f, 'a)
     }
@@ -69,8 +69,16 @@ object CpsAsyncStreamMacro:
     def transform[R:Type, F[_]:Type, C<:CpsMonadContext[F]:Type, T:Type](f: Expr[ C ?=> CpsAsyncEmitter[F,T] => Unit], 
                                              absorber: Expr[CpsAsyncEmitAbsorber.Aux[R,F,C,T]])(using Quotes): Expr[R] = {
           import quotes.reflect._
-          val r = transformTree[R,F,C,T](f.asTerm, absorber)
-          r.asExprOf[R]
+          Expr.summon[UseCompilerPlugin] match
+            case Some(_) =>
+              val refCpsAsyncStreamAppky = Ref(Symbol.requiredMethod("cps.plugin.cpsAsyncStreamApply"))
+              Apply(
+                TypeApply( refCpsAsyncStreamAppky, List(TypeTree.of[R], TypeTree.of[F], TypeTree.of[T], TypeTree.of[C])),
+                List(absorber.asTerm, f.asTerm)
+              ).asExprOf[R]
+            case None =>
+              val r = transformTree[R,F,C,T](f.asTerm, absorber)
+              r.asExprOf[R]
     }
           
     def transformTree[R:Type, F[_]:Type, C<:CpsMonadContext[F]:Type, T:Type](using qctx: Quotes)(
@@ -89,7 +97,8 @@ object CpsAsyncStreamMacro:
                      val lambda2 = Lambda(owner, mt2, {(owner, args) =>
                         val emitterTerm = args.head.asInstanceOf[Term]
                         val nBody = cps.macros.common.TransformUtil.substituteLambdaParams(
-                                          List(param,context), List(args.head, contextArgs.head), body, owner) 
+                                          List(param,context), List(args.head, contextArgs.head), body, owner)
+                        // TODO: move to cpsAsync
                         val asyncBody = cps.macros.Async.transformMonad[F,Unit,C](nBody.asExprOf[Unit],
                                                                                  '{ ${absorber}.asyncMonad },
                                                                                  contextTerm.asExprOf[C] 

@@ -1,43 +1,20 @@
 Dependency
 ==========
 
-The following table presents the compatibility between versions of |Scala 3|_ and |dotty-cps-async|_ :
-
- .. list-table::
-    :widths: 5 5
-    :header-rows: 1
-
-    * - |header_scala3|_
-      - |header_dotty-cps-async|_
-
-    * - |3.2.0|_\+
-      - |0.9.11|_\+
-
-    * - |3.1.1|_
-      - |0.9.6|_\+
-
-    * - |3.1.0|_
-      - |0.9.5|_
-
-    * - |3.0.2|_
-      - |0.9.4|_
-
-
 Sbt Example
 -----------
 
-The current prerelease is |0.9.11|_ for using with Scala |3.2.0|_.
+The current prerelease is |0.9.17| for using with Scala |3.3.0|_.
 
  .. code-block:: scala
 
-   scalaVersion := "3.2.0"
-   libraryDependencies += "com.github.rssh" %% "dotty-cps-async" % "0.9.11"
+   libraryDependencies += "com.github.rssh" %% "dotty-cps-async" % "0.9.17"
 
 JavaScript and Native targets are also supported.
 
  .. code-block:: scala
 
-   libraryDependencies += "com.github.rssh" %%% "dotty-cps-async" % "0.9.11"
+   libraryDependencies += "com.github.rssh" %%% "dotty-cps-async" % "0.9.17"
 
 **Note**: :red:`%%%` automatically determines whether we are in a Scala/JVM or a Scala.js or a Scala.Native project (see |Scala.js Cross-Building|_).
 
@@ -45,6 +22,10 @@ JavaScript and Native targets are also supported.
 
 Basic Usage
 ===========
+
+Traditional async/await interface
+---------------------------------
+
 
 The usage is similar to working with async/await frameworks in Scala 2 (e.g. |scala-async|_) and in other languages.
 
@@ -78,7 +59,7 @@ Inside the async block, we can use the |await|_ pseudo-function.
  .. index:: CpsMonad
  .. index:: CpsTryMonad
 
-In the above code type ``MyMonad`` must implement one of the two type classes |CpsMonad|_ or |CpsTryMonad|_ (which supports try/catch).
+In the above code, the type ``MyMonad`` must implement one of the two type classes |CpsMonad|_ or |CpsTryMonad|_ (which supports try/catch).
 
 The minimal complete snippet looks as follows:
 
@@ -114,13 +95,13 @@ This minimal example is for |Future|_ monad and depends on library |dotty-cps-as
  .. code-block:: scala
 
   // https://mvnrepository.com/artifact/com.github.rssh/dotty-cps-async
-  libraryDependencies += "com.github.rssh" %% "dotty-cps-async" % "0.9.11"
+  libraryDependencies += "com.github.rssh" %% "dotty-cps-async" % "0.9.17"
 
 
 **Note**: The :ref:`Integrations` section lists further library dependencies needed for integration with well-known monadic frameworks such as |Cats Effect|_, |Monix|_, |ScalaZ IO|_ or |ZIO|_ and streaming frameworks like |Akka Streams|_ and |fs2|_. 
 
 
-Also a monad can be abstracted out as in the following example:
+A monad  can also be abstracted out as in the following example:
 
 
  .. code-block:: scala
@@ -178,9 +159,61 @@ The |async|_ macro will transform the code block into something like
 
   </details>
 
-As transformation technique we use optimized monadic transform, the number of monadic brackets is the 
+Since we use optimized monadic transform as the transformation technique, the number of monadic brackets will be  the
 same as the number of |await|_ s in the source code.  
 You can read the :ref:`notes about implementation details <random-notes>`.
+
+Alternative names
+-----------------
+
+`async/await` names is appropriate for Future-s and effect monads. There are other monads where a  direct style can be helpful
+in applications such as probabilistic programming, navigation over search space, collections, and many other.
+We define alternative names for macros: `reify/reflect`, which can be more appropriate in the general case:
+
+
+.. code-block:: scala
+
+ def bayesianCoin(nFlips: Int): Distribution[Trial] = reify[Distribution] {
+       val haveFairCoin = reflect(tf())
+       val myCoin = if (haveFairCoin) coin else biasedCoin(0.9)
+       val flips = reflect(myCoin.repeat(nFlips))
+       Trial(haveFairCoin, flips)
+  }
+
+
+.. code-block:: scala
+
+ import cps.*
+ import cps.monads.{*,given}
+
+ def allPairs[T](l: List[T]): List[(T,T)] = reify[List] {
+       (reflect(l),reflect(l))
+  }
+
+
+
+Yet one pair of names 'lift/unlift', used for example in the |monadless|_ library by Flavio W. Brasill,  can be enabled by importing `cps.syntax.monadless.*`.
+
+
+.. code-block:: scala
+
+ import cps.*
+ import cps.syntax.monadless.* 
+
+ class TestMonadlessSyntax { 
+
+  import cps.monads.FutureAsyncMonad
+
+  val responseString: Future[String] = lift {
+    try {
+      responseToString(unlift(badRequest.get))
+    } catch {
+      case e: Exception => s"received an exceptional result: $e"
+    }
+  }
+
+ }
+ 
 
 
 .. rubric:: Footnotes
@@ -191,17 +224,9 @@ You can read the :ref:`notes about implementation details <random-notes>`.
 .. ###########################################################################
 .. ## Hyperlink definitions with text formating (e.g. verbatim, bold)
 
-.. |0.9.4| replace:: ``0.9.4``
-.. _0.9.4: https://mvnrepository.com/artifact/com.github.rssh/dotty-cps-async_3/0.9.4
+.. |0.9.17| replace:: ``0.9.17``
+.. _0.9.17: https://repo1.maven.org/maven2/com/github/rssh/dotty-cps-async_3/0.9.17/
 
-.. |0.9.5| replace:: ``0.9.5``
-.. _0.9.5: https://mvnrepository.com/artifact/com.github.rssh/dotty-cps-async_3/0.9.5
-
-.. |0.9.6| replace:: ``0.9.6``
-.. _0.9.6: https://mvnrepository.com/artifact/com.github.rssh/dotty-cps-async_3/0.9.6
-
-.. |0.9.11| replace:: ``0.9.11``
-.. _0.9.11: https://repo1.maven.org/maven2/com/github/rssh/dotty-cps-async_3/0.9.11/
 .. /*to update*/ 
 
 .. |3.0.2| replace:: ``3.0.2``
@@ -215,6 +240,10 @@ You can read the :ref:`notes about implementation details <random-notes>`.
 
 .. |3.2.0| replace:: ``3.2.0``
 .. _3.2.0: https://github.com/lampepfl/dotty/releases/tag/3.2.0
+
+.. |3.3.0| replace:: ``3.3.0``
+.. _3.3.0: https://github.com/lampepfl/dotty/releases/tag/3.3.0
+
 
 .. |Akka Streams| replace:: **Akka Streams**
 .. _Akka Streams: https://doc.akka.io/docs/akka/current/stream/
@@ -252,6 +281,8 @@ You can read the :ref:`notes about implementation details <random-notes>`.
 .. |Monix| replace:: **Monix**
 .. _Monix: https://monix.io/
 
+.. |monadless| replace:: ``monadless``
+.. _monadless: https://github.com/monadless/monadless
 .. |Scala 3| replace:: **Scala 3**
 .. _Scala 3: https://dotty.epfl.ch/
 

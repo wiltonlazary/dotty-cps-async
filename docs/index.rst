@@ -13,6 +13,7 @@ User Manual
 
    BasicUsage
    HighOrderFunctions
+   ReturningClause
    MonadsInteroperability
    AutomaticColoring
    AsyncStreams
@@ -20,6 +21,7 @@ User Manual
    MonadContexts
    RuntimeAwait
    Features
+   Migration
    random-notes/index.rst
    FAQ
    References

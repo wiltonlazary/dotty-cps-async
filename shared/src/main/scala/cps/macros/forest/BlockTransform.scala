@@ -1,5 +1,5 @@
 // CPS Transform for tasty block
-// (C) Ruslan Shevchenko <ruslan@shevchenko.kiev.ua>, 2019, 2020, 2021
+// (C) Ruslan Shevchenko <ruslan@shevchenko.kiev.ua>, 2019 - 2023
 package cps.macros.forest
 
 import scala.quoted._
@@ -134,13 +134,13 @@ class BlockTransform[F[_]:Type, T:Type, C<:CpsMonadContext[F]:Type](cpsCtx: Tran
       discardTerm.tpe.asType match
         case '[AwaitValueDiscard[F,tt]] =>
            val refP = p.asExprOf[F[tt]]
-           '{  await[F,tt,F]($refP)(using ${cpsCtx.monad}, ${cpsCtx.monadContext})  }
+           '{  await[F,tt,F]($refP)(using ${cpsCtx.monadContext}, CpsMonadConversion.identityConversion[F])  }
         //bug in dotty. TODO: submit
         //case '[AwaitValueDiscard[[xt]=>>ft,tt]] =>
         //   ???
         case _ => 
            val (ftr, ttr) = parseDiscardTermType(discardTerm.tpe)
-           val ftmt = TypeRepr.of[CpsMonad].appliedTo(ftr)
+           val ftmt = TypeRepr.of[CpsMonadConversion].appliedTo(List(ftr,TypeRepr.of[F]))
            Implicits.search(ftmt) match
               case monadSuccess: ImplicitSearchSuccess =>
                 val ftm = monadSuccess.tree
@@ -150,7 +150,7 @@ class BlockTransform[F[_]:Type, T:Type, C<:CpsMonadContext[F]:Type](cpsCtx: Tran
                           List(Inferred(ftr),Inferred(ttr),Inferred(ftr))),
                        List(p.asTerm)
                      ),
-                     List(ftm, cpsCtx.monadContext.asTerm)
+                     List(cpsCtx.monadContext.asTerm,ftm)
                 ).asExpr
               case monadFailure: ImplicitSearchFailure =>
                 throw MacroError(s"Can't find appropriative monad for ${discardTerm.show}, ${monadFailure.explanation}  : ", p)

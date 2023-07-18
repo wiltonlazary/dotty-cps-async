@@ -14,10 +14,12 @@ enum CountSignal[+T]:
 object CBSWordCount1:
 
   def generate(line: String, channel:ASChannel[ComputationBound, CountSignal[String]]):ComputationBound[Unit] = {
-     //implicit val printCode = cps.macroFlags.PrintCode
-     //implicit val debugLevel = cps.macroFlags.DebugLevel(20)
+     //implicit val printCode = cps.macros.flags.PrintCode
+     //implicit val debugLevel = cps.macros.flags.DebugLevel(20)
      val r = async {
-       val words = line.split(" ").nn
+       //dotty bug:  https://github.com/lampepfl/dotty/issues/17009
+       //val words = line.split(" ").nn
+       val words = line.split(" ").asInstanceOf[Array[String]]
        for(w <- words) {
          await(channel.write(CountSignal.Data(w.nn)))
        }

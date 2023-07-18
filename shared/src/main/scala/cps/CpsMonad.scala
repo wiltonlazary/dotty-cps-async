@@ -1,7 +1,7 @@
 /*
  * dotty-cps-async: https://github.com/rssh/dotty-cps-async
  *
- * (C) Ruslan Shevchenko <ruslan@shevchenko.kiev.ua>, Kyiv, 2020, 2021, 2022
+ * (C) Ruslan Shevchenko <ruslan@shevchenko.kiev.ua>, Kyiv, 2020, 2021, 2022, 2023
  */
 package cps
 
@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicReference
  * Implementing this typeclass is enough to use async/await with supports of
  * basic control-flow constructions (if, loops, but no exceptions).
  */
-trait CpsMonad[F[_]] extends CpsAwaitable[F] {
+trait CpsMonad[F[_]]  {
 
    type WF[X] = F[X]
 
@@ -49,35 +49,101 @@ trait CpsMonad[F[_]] extends CpsAwaitable[F] {
     * Lazy variant of pure, which by default -
     *  create monadic expression according to the 
     *  choosen monad types.
-    *  (i.e. delaing for effect monads,  
-    *    starting for eager monand, pure by defiault)
+    *  (i.e. delaying for effect monads,  
+    *    starting for eager monand, 
+    *    pure by default)
     **/
    def lazyPure[T](op: =>T):F[T] =
       map(pure(())){ _ => op}
 
+   def flatten[T](ffa: F[F[T]]): F[T] =
+      flatMap(ffa)(x => x)
 }
 
 object CpsMonad {
 
   type Aux[F[_],C<:CpsMonadContext[F]] = CpsMonad[F] { type Context = C }
 
+
 }
 
 
 /**
- * Marker typeclass for wrappers, which we can await.
- * Such traits can be not monads itself (for example, its impossible to set monad structure over js.Promise)
- * but can be convertable into cps monads.
+ * Throw support for monads, decoupled from monad itself.
+ * @tparam F
+ */
+trait CpsThrowSupport[F[_]] {
+
+  /**
+   * represent error `e` in monadic context.
+   **/
+  def error[A](e: Throwable): F[A]
+
+}
+
+
+
+/**
+ * Monad, where we can throw error but can catch one only
+ * outside of a monad context.
+ *
+ * An example as monad which interpret in sync context,
+ * such as Option or collections.
  **/
-trait CpsAwaitable[F[_]] 
+trait CpsThrowMonad[F[_]] extends CpsMonad[F] with CpsThrowSupport[F] {
+
+  override type Context <: CpsThrowMonadContext[F]
+
+}
+
+
+trait CpsTrySupport[F[_]] extends CpsThrowSupport[F] {
+
+   def flatMapTry[A,B](fa:F[A])(f: Try[A] => F[B]):F[B]
+
+   def fromTry[A](ta: Try[A]): F[A]
+
+   def withAsyncFinalizer[A](fa: F[A])(f: => F[Unit]):F[A] = {
+      flatMapTry(fa){ r =>
+         try
+           flatMapTry(f){ finR =>
+             finR match
+               case Success(_) =>
+                 fromTry(r)
+               case Failure(finRex) =>
+                  r match
+                    case Failure(rEx) =>
+                             finRex.addSuppressed(rEx)
+                             error(finRex)
+                    case _ =>error(finRex)
+           }
+         catch
+           case NonFatal(ex) =>
+             r match
+               case Failure(rEx) => ex.addSuppressed(rEx)
+               case _ =>
+             error(ex)
+      }
+   }
+
+   def withAsyncErrorHandler[A](fa: F[A])(f: Throwable => F[A]):F[A] = {
+      flatMapTry(fa){ r => r match
+          case Failure(ex) => f(ex)
+          case _ => fromTry(r)
+      }
+   }
+
+}
 
 
 /**
  * If you monad supports this typeclass, than
  * you can use try/catch/finally inside await.
  **/
-trait CpsTryMonad[F[_]] extends CpsMonad[F] {
+trait CpsTryMonad[F[_]] extends CpsThrowMonad[F] with CpsTrySupport[F] {
 
+   override type Context <: CpsTryMonadContext[F]
+  
    /**
     * represent error `e` in monadic context.
     **/
@@ -401,10 +467,10 @@ trait CpsSchedulingMonad[F[_]] extends CpsConcurrentMonad[F] {
    type Spawned[A] = F[A]
 
    /**
-    * representation of spawnEffect as immediate operation.
+    * representation of spawnEffect as lazy suspension of immediate operation.
     **/
    def spawnEffect[A](op: => F[A]): F[F[A]] =
-         pure(spawn(op))
+         lazyPure(spawn(op))
 
    /**
     * join spawned immediate monad means to receive those spawing monad.

@@ -3,6 +3,7 @@ package futureScope
 import cps.*
 import cps.monads.{*,given}
 import cps.stream.{*,given}
+import cps.plugin.annotation.CpsNotChange
 import cps.testconfig.given
 
 import scala.concurrent.*
@@ -51,6 +52,7 @@ object FutureGroup {
 
    end Builder
 
+   @cps.plugin.annotation.CpsNotChange()
    def collect[E](runners: Iterable[FutureScopeContext ?=> Future[E]])(using FutureScopeContext): FutureGroup[E] =
       build[Iterable[FutureScopeContext ?=> Future[E]]](runners)
 
@@ -66,7 +68,7 @@ class DefaultFutureGroup[E](parent: FutureScopeContext) extends FutureGroup[E] {
 
    override val eventFlow = EventFlow()(using parent.executionContext) 
 
-   val scopeContext = new FutureScopeContext(parent.executionContext, Some(parent))
+   val scopeContext = new FutureScopeContext(parent.monad, parent.executionContext, Some(parent))
   
    override def cancel(ex: ScopeCancellationException): CancellationResult = 
       scopeContext.cancel(ex)

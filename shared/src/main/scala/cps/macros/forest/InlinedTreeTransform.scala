@@ -1,5 +1,5 @@
 // CPS Transform for tasty inlined
-// (C) Ruslan Shevchenko <ruslan@shevchenko.kiev.ua>, 2019, 2020, 2021, 2022
+// (C) Ruslan Shevchenko <ruslan@shevchenko.kiev.ua>, 2019, 2020, 2021, 2022, 2023
 package cps.macros.forest
 
 import scala.quoted._
@@ -9,6 +9,7 @@ import cps.macros._
 import cps.macros.common._
 import cps.macros.misc._
 import scala.collection.immutable.HashMap
+
 
 
 trait InlinedTreeTransform[F[_], CT, CC<:CpsMonadContext[F]]:
@@ -33,7 +34,7 @@ trait InlinedTreeTransform[F[_], CT, CC<:CpsMonadContext[F]]:
                                    newBindings: List[Definition], 
                                    awaitVals: List[ValDef])
   
-  def runInlined(origin: Inlined): CpsTree =
+  def runInlined(origin: Inlined)(owner: Symbol): CpsTree =
     if (cpsCtx.flags.debugLevel >= 15) then
         cpsCtx.log(s"Inlined, origin=${safeShow(origin)}")  
     val monad = cpsCtx.monad.asTerm
@@ -47,13 +48,13 @@ trait InlinedTreeTransform[F[_], CT, CC<:CpsMonadContext[F]]:
                  case Some(lambda) => 
                     lambda match
                       case Lambda(params, body) =>
-                         val cpsBinding = runRoot(body)
+                         val cpsBinding = runRoot(body)(TransformUtil.lambdaBodyOwner(lambda))
                          val resultType = vx.tpt.tpe match
                              case AppliedType(fun, args) => args.last
                              case _ => body.tpe.widen
                          if (cpsBinding.isAsync) then
-                            val lambdaTree = new AsyncLambdaCpsTree(lambda, params, cpsBinding, resultType)
-                            val newSym = Symbol.newVal(Symbol.spliceOwner, name, lambdaTree.rtpe,  vx.symbol.flags, Symbol.noSymbol)
+                            val lambdaTree = new AsyncLambdaCpsTree(owner, lambda, params, cpsBinding, resultType)
+                            val newSym = Symbol.newVal(owner, name, lambdaTree.rtpe,  vx.symbol.flags, Symbol.noSymbol)
                             val rLambda = lambdaTree.rLambda.changeOwner(newSym)
                             val newValDef = ValDef(newSym, Some(rLambda))
                             // check:
@@ -71,7 +72,7 @@ trait InlinedTreeTransform[F[_], CT, CC<:CpsMonadContext[F]]:
                                  (owner,args)=> TransformUtil.substituteLambdaParams(params,args,body,owner)
                                )
                             ))
-                            val bindingRecord = InlinedFunBindingRecord(newSym, CpsTree.pure(newValDef.rhs.get), vx, resultType) 
+                            val bindingRecord = InlinedFunBindingRecord(newSym, CpsTree.pure(newSym,newValDef.rhs.get), vx, resultType) 
                             s.copy(
                                changes = s.changes.updated(vx.symbol, bindingRecord),
                                newBindings = newValDef::s.newBindings
@@ -83,7 +84,7 @@ trait InlinedTreeTransform[F[_], CT, CC<:CpsMonadContext[F]]:
                          s.copy(newBindings = vx::s.newBindings)
                  case None => 
                     val cpsRhs = try {
-                            runRoot(rhs)
+                            runRoot(rhs)(owner)
                       } catch {
                          case ex: MacroError =>
                            report.warning(s"error during transformation of valdef in inline, tpt=${tpt.show}\n, rhs=${rhs.show}\n, ex=${ex}", posExprs(rhs))
@@ -92,7 +93,9 @@ trait InlinedTreeTransform[F[_], CT, CC<:CpsMonadContext[F]]:
                     cpsRhs.syncOrigin match
                       case None =>
                          val newName = if (debug) name+"DEBUG" else name
-                         val newSym = Symbol.newVal(Symbol.spliceOwner, newName, cpsRhs.rtpe,  vx.symbol.flags, Symbol.noSymbol)
+                         //bug in dotty
+                         //val newSym = Symbol.newVal(Symbol.spliceOwner, newName, cpsRhs.rtpe,  vx.symbol.flags, Symbol.noSymbol)
+                         val newSym = Symbol.newVal(Symbol.spliceOwner, newName, cpsRhs.rtpe,  Flags.EmptyFlags, Symbol.noSymbol)
                          val newValDef = ValDef(newSym, Some(cpsRhs.transformed.changeOwner(newSym)))
 
                          if (cpsRhs.isLambda) {
@@ -104,9 +107,12 @@ trait InlinedTreeTransform[F[_], CT, CC<:CpsMonadContext[F]]:
                          } else  {
                             // here awaits usage are internal  (we just use)
                             val monadContext = cpsCtx.monadContext.asTerm
-                     
-                            val awaitValSym = Symbol.newVal(Symbol.spliceOwner, name+"$await", tpt.tpe,  
-                                                            vx.symbol.flags, Symbol.noSymbol)
+                            //bug in dotty.
+                            //  TODO: find what flaga symbol have now and reproduce with minimal example
+                            //val awaitValSym = Symbol.newVal(Symbol.spliceOwner, name+"$await", tpt.tpe,
+                            //                                vx.symbol.flags, Symbol.noSymbol)
+                            val awaitValSym = Symbol.newVal(Symbol.spliceOwner, name+"$await", tpt.tpe,
+                                                            Flags.EmptyFlags, Symbol.noSymbol)
                             val awaitVal = ValDef(awaitValSym, Some(
                                    generateAwaitFor(Ref(newSym), cpsRhs.otpe).changeOwner(awaitValSym)
                             ))
@@ -118,7 +124,10 @@ trait InlinedTreeTransform[F[_], CT, CC<:CpsMonadContext[F]]:
                          }
                       case Some(term) =>
                          if (cpsRhs.isChanged) {
-                            val newSym = Symbol.newVal(Symbol.spliceOwner, name, vx.tpt.tpe,  vx.symbol.flags, Symbol.noSymbol)
+                            //  buf in dotty ?
+                            //    TODO: uncomment and debug to submit
+                            //val newSym = Symbol.newVal(Symbol.spliceOwner, name, vx.tpt.tpe,  vx.symbol.flags, Symbol.noSymbol)
+                            val newSym = Symbol.newVal(Symbol.spliceOwner, name, vx.tpt.tpe,  Flags.EmptyFlags, Symbol.noSymbol)
                             val newValDef = ValDef(newSym, Some(term.changeOwner(newSym)))
                             val bindingRecord =  InlinedValBindingRecord(newSym, cpsRhs, vx) 
                             s.copy(newBindings = newValDef::s.newBindings,
@@ -231,11 +240,11 @@ trait InlinedTreeTransform[F[_], CT, CC<:CpsMonadContext[F]]:
         funValDefs.changes.foreach{ b =>
            cpsCtx.log(s"fubValDef changes binding: ${b}")
         } 
-    val cpsBody = runRoot(body)
+    val cpsBody = runRoot(body)(owner)
     if (origin.bindings.isEmpty) then
        cpsBody
     else
-       InlinedCpsTree(origin, funValDefs.newBindings.reverse,  cpsBody)
+       InlinedCpsTree(owner, origin, funValDefs.newBindings.reverse,  cpsBody)
 
 
   def checkLambdaDef(term:Term):Option[Term] =
@@ -249,6 +258,7 @@ trait InlinedTreeTransform[F[_], CT, CC<:CpsMonadContext[F]]:
   def generateAwaitFor(term: Term, tpe:TypeRepr): Term =
    val monad = cpsCtx.monad.asTerm
    val monadContext = cpsCtx.monadContext.asTerm
+   val identityConversion = '{ CpsMonadConversion.identityConversion[F] }.asTerm
    Apply(
       Apply(
          TypeApply(
@@ -257,7 +267,7 @@ trait InlinedTreeTransform[F[_], CT, CC<:CpsMonadContext[F]]:
          ),
          List(term)
       ),
-      List(monad, monadContext)
+      List(monadContext,identityConversion)
    )
 
 
@@ -280,7 +290,7 @@ object InlinedTreeTransform:
 
          def bridge(): CpsExpr[F,T] =
             val origin = inlinedTerm.asInstanceOf[quotes.reflect.Inlined]
-            runInlined(origin).toResult[T]
+            runInlined(origin)(qctx.reflect.Symbol.spliceOwner).toResult[T]
 
 
      }

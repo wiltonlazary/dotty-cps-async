@@ -14,12 +14,18 @@ trait SelectTreeTransform[F[_], CT, CC<:CpsMonadContext[F]]:
   import quotes.reflect._
 
   // case selectTerm @ Select(qualifier,name) 
-  def runSelect( selectTerm: Select ): CpsTree =
-     val symbol = selectTerm.symbol
-     val qual = runRoot(selectTerm.qualifier)
-     val r = qual.select(selectTerm, symbol, selectTerm.tpe)
-     r
+  def runSelect( selectTerm: Select )(owner: Symbol): CpsTree = {
+    val symbol = selectTerm.symbol
+    val qual = runRoot(selectTerm.qualifier)(owner)
+    val r = if (qual.isSync && !qual.isChanged) then {
+      CpsTree.pure(owner, selectTerm)
+    } else {
+      qual.select(selectTerm, symbol, selectTerm.tpe)
+    }
+    r
+  }
 
+end SelectTreeTransform
 
 object SelectTreeTransform:
 
@@ -41,7 +47,8 @@ object SelectTreeTransform:
           
          def bridge(): CpsExpr[F,T] =
             val origin = selectTerm.asInstanceOf[quotes.reflect.Select]
-            runSelect(origin).toResult[T]
+            val owner = quotes.reflect.Symbol.spliceOwner
+            runSelect(origin)(owner).toResult[T]
                         
 
      } 

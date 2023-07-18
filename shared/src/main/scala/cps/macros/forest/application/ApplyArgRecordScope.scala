@@ -3,13 +3,14 @@ package cps.macros.forest.application
 import scala.annotation.tailrec
 import scala.quoted._
 import scala.collection.immutable.Queue
-
+import scala.util.control.NonFatal
 
 import cps._
 import cps.macros._
 import cps.macros.common._
 import cps.macros.forest._
 import cps.macros.misc._
+
 
 
 trait ApplyArgRecordScope[F[_], CT, CC<:CpsMonadContext[F]]:
@@ -19,16 +20,20 @@ trait ApplyArgRecordScope[F[_], CT, CC<:CpsMonadContext[F]]:
   import qctx.reflect._
 
   case class ApplyArgsSummaryPropertiesStep1(
+    size: Int,
     hasAsync: Boolean,
     hasShiftedLambda: Boolean,
-    shouldBeChangedSync: Boolean
+    shouldBeChangedSync: Boolean,
+    hasCpsDirect: Boolean
   ):
 
     def merge(other: ApplyArgRecord): ApplyArgsSummaryPropertiesStep1 =
       ApplyArgsSummaryPropertiesStep1(
+        size + 1,
         hasAsync || other.isAsync,
         hasShiftedLambda || other.hasShiftedLambda,
         shouldBeChangedSync || other.shouldBeChangedSync,
+        hasCpsDirect || other.isCpsDirect
       )
 
     def mergeSeq(seq: Seq[ApplyArgRecord]): ApplyArgsSummaryPropertiesStep1 =
@@ -41,7 +46,7 @@ trait ApplyArgRecordScope[F[_], CT, CC<:CpsMonadContext[F]]:
   object ApplyArgsSummaryPropertiesStep1:
 
      def mergeSeqSeq(args: Seq[Seq[ApplyArgRecord]]): ApplyArgsSummaryPropertiesStep1 =
-        val zero = ApplyArgsSummaryPropertiesStep1(false,false,false)
+        val zero = ApplyArgsSummaryPropertiesStep1(0,false,false,false,false)
         zero.mergeSeqSeq(args)
 
   case class ApplyArgsSummaryProperties(
@@ -52,6 +57,7 @@ trait ApplyArgRecordScope[F[_], CT, CC<:CpsMonadContext[F]]:
      def hasAsync: Boolean = step1.hasAsync
      def hasShiftedLambda: Boolean = step1.hasShiftedLambda
      def shouldBeChangedSync: Boolean = step1.shouldBeChangedSync
+     def hasCpsDirect: Boolean = step1.hasCpsDirect
 
      def mergeStep2SeqSeq(seqSeq: Seq[Seq[ApplyArgRecord]]): ApplyArgsSummaryProperties =
        seqSeq.foldLeft(this)((s,e)=> s.mergeStep2Seq(e))
@@ -82,6 +88,9 @@ trait ApplyArgRecordScope[F[_], CT, CC<:CpsMonadContext[F]]:
     // means, that the value of argument is independed from the order of evaluation of aguments in a function.
     def noOrderDepended: Boolean
 
+    // means, that this is a CpsDirect context parameter
+    def isCpsDirect: Boolean
+
     // usePrepend: means that args is collected as 'append(...append(...  funcall(..ident...)))`
     //  when some of arguments is async, we should in 'first part'(i.e. in append) - calculate
     //  argument itself, to preserve order of evaluation.  When we have no async arguments, than
@@ -90,6 +99,8 @@ trait ApplyArgRecordScope[F[_], CT, CC<:CpsMonadContext[F]]:
 
     // means, that the value of argument can depend from the order of evaluation of aguments in a function.
     def isOrderDepended = !noOrderDepended
+
+
 
     def shift(shiftType: ApplicationShiftType): ApplyArgRecord
 
@@ -106,7 +117,7 @@ trait ApplyArgRecordScope[F[_], CT, CC<:CpsMonadContext[F]]:
          TypeApply(Select.unique(runtimeAwait, "await"),List(Inferred(resultType))),
          List(arg)
        ),
-       List(m,mc)
+       List(mc)
       )
 
 
@@ -127,6 +138,7 @@ trait ApplyArgRecordScope[F[_], CT, CC<:CpsMonadContext[F]]:
           term
     override def isAsync = elements.exists(_.isAsync)
     override def hasShiftedLambda = elements.exists(_.hasShiftedLambda)
+    override def isCpsDirect: Boolean = false
     override def noOrderDepended = elements.forall(_.noOrderDepended)
     override def shouldBeChangedSync:Boolean = elements.exists(_.shouldBeChangedSync)
     override def shift(shiftType: ApplicationShiftType) = copy(elements = elements.map(_.shift(shiftType)))
@@ -180,7 +192,8 @@ trait ApplyArgRecordScope[F[_], CT, CC<:CpsMonadContext[F]]:
   case class ApplyArgNoPrecalcTermRecord(
        term: Term,
        index: Int,
-       isChanged: Boolean
+       isChanged: Boolean,
+       override val isCpsDirect: Boolean
   ) extends ApplyArgRecord
   {
      def isAsync = false
@@ -197,7 +210,8 @@ trait ApplyArgRecordScope[F[_], CT, CC<:CpsMonadContext[F]]:
        index: Int,
        termCpsTree: CpsTree,
        valDef: ValDef,
-       ident: Term
+       ident: Term,
+        override val isCpsDirect: Boolean
   ) extends ApplyArgRecord
   {
      def isAsync = termCpsTree.isAsync
@@ -215,7 +229,7 @@ trait ApplyArgRecordScope[F[_], CT, CC<:CpsMonadContext[F]]:
 
      def shift(shiftType: ApplicationShiftType): ApplyArgRecord = this
      override def append(tree: CpsTree): CpsTree =
-        ValCpsTree(valDef, termCpsTree, tree)
+        ValCpsTree(termCpsTree.owner, valDef, termCpsTree, tree)
   }
 
 
@@ -224,18 +238,24 @@ trait ApplyArgRecordScope[F[_], CT, CC<:CpsMonadContext[F]]:
        index: Int,
        cpsBody: CpsTree,
        optShiftType: Option[ApplicationShiftType],
-       existsLambdaUnshift: Boolean
+       existsLambdaUnshift: Boolean,
+       owner: Symbol
   ) extends ApplyArgRecord {
 
        def hasShiftedLambda: Boolean = cpsBody.isAsync && !existsLambdaUnshift
 
        def isAsync: Boolean = false
 
+       def isCpsDirect: Boolean = false
+
        def noOrderDepended: Boolean = true
 
        def shouldBeChangedSync:Boolean = cpsBody.isChanged || (cpsBody.isAsync && existsLambdaUnshift )
 
        def identArg(existsAsync:Boolean): Term =
+         generateLambda(existsAsync, false)
+
+       def generateLambda(existsAsync: Boolean, allowUncontext: Boolean): Term =   
          if (cpsCtx.flags.debugLevel >= 15) then
             cpsCtx.log(s"ApplyArgLambdaRecord::identArg, cpsBody=${cpsBody}")
             cpsCtx.log(s"ApplyArgLambdaRecord::identArg, hasShiftedLambda=${hasShiftedLambda}")
@@ -248,21 +268,26 @@ trait ApplyArgRecordScope[F[_], CT, CC<:CpsMonadContext[F]]:
             val paramNames = params.map(_.name)
             val paramTypes = params.map(_.tpt.tpe)
             cpsBody.syncOrigin match
-              case Some(changedBody) => 
-                 val mt = MethodType(paramNames)(_ => paramTypes, _ => changedBody.tpe.widen)
-                 Lambda(Symbol.spliceOwner, mt,
-                       (owner,args) => changeArgs(params,args,changedBody,owner).changeOwner(owner))
+              case Some(syncBody) =>
+                 if (cpsBody.isChanged) then 
+                    if (term.tpe.isContextFunctionType && !allowUncontext) then
+                      throw MacroError("Can't transform context function: TastyAPI don;t support this yet",posExpr(term))
+                    val mt = MethodType(paramNames)(_ => paramTypes, _ => syncBody.tpe.widen)
+                    Lambda(owner, mt,
+                       (owner,args) => changeArgs(params,args,syncBody,owner).changeOwner(owner))
+                 else
+                    term
               case None =>
                  if (existsLambdaUnshift) then
                     body.tpe.widen.asType match
-                      case '[F[r]] =>
-                         val nBody = '{ ${cpsCtx.monad}.flatMap(
+                      case '[F[r]] if body.tpe.widen <:< TypeRepr.of[F[r]] =>
+                        val nBody = '{ ${cpsCtx.monad}.flatMap(
                                              ${cpsBody.transformed.asExprOf[F[F[r]]]})((x:F[r])=>x) }.asTerm
-                         val mt = MethodType(paramNames)(_ => paramTypes, _ => body.tpe.widen)
-                         Lambda(Symbol.spliceOwner, mt, 
+                        val mt = MethodType(paramNames)(_ => paramTypes, _ => body.tpe.widen)
+                        Lambda(owner, mt, 
                               (owner,args) => changeArgs(params,args,nBody,owner).changeOwner(owner))
                       case _ =>
-                         throw MacroError(s"F[?] expected, we have ${body.tpe.widen.show}",term.asExpr)
+                        throw MacroError(s"F[?] expected, we have ${body.tpe.widen.show}",term.asExpr)
                  else
                     throw MacroError(s"Internal error: unshift is called when it not exists",term.asExpr)
          else
@@ -308,18 +333,21 @@ trait ApplyArgRecordScope[F[_], CT, CC<:CpsMonadContext[F]]:
             case at@AnnotatedType(underlying,anon) =>
                   shiftedArgExpr(existsAsync, shiftType, underlying, params, body)
             case other =>
-                  // TODO: logging compiler interface instead println
-                  println(s"MethodType expected, we have ${term.tpe}")
-                  println(s"term.show = ${term.show}")
-                  println(s"term.body = ${term}")
-                  println(s"mt = ${other}")
+                  report.error(
+                    s"""
+                      MethodType expected, we have ${term.tpe}
+                      term.show = ${term.show}
+                      term.body = ${term}
+                      mt = ${other}
+                    """
+                  )
                   throw MacroError(s"methodType expected for ${term.asExpr.show}, we have $other",term.asExpr)
 
        def shift(shiftType: ApplicationShiftType): ApplyArgRecord = copy(optShiftType = Some(shiftType))
 
        def append(a: CpsTree): CpsTree = 
         report.warning("lambda in statement position",term.pos)
-        BlockCpsTree(Queue(term), a)
+        BlockCpsTree(owner, Queue(term), a.changeOwner(owner))
 
 
 
@@ -329,10 +357,9 @@ trait ApplyArgRecordScope[F[_], CT, CC<:CpsMonadContext[F]]:
          val matchVar = body.scrutinee
          val paramNames = params.map(_.name)
 
-         if (cpsCtx.flags.debugLevel >= 15)
-             println(s"createAsyncPartialFunction: from = $from, to=$to")
-             println(s"toInF=$toInF")
-
+         if (cpsCtx.flags.debugLevel >= 15) then
+             cpsCtx.log(s"createAsyncPartialFunction: from = $from, to=$to")
+ 
          def newCheckBody(inputVal:Term):Term =
 
             val casePattern = '{
@@ -419,7 +446,9 @@ trait ApplyArgRecordScope[F[_], CT, CC<:CpsMonadContext[F]]:
            pattern match
              case bd@Bind(name,pat1) =>
                 val bSym = bd.symbol
-                val nBSym = Symbol.newBind(Symbol.spliceOwner, name,bSym.flags, Ref(bSym).tpe.widen)
+                //  -Xcheck-macro complain that bSyn.flags are invalid
+                //val nBSym = Symbol.newBind(Symbol.spliceOwner, name, bSym.flags, Ref(bSym).tpe.widen)
+                val nBSym = Symbol.newBind(Symbol.spliceOwner, name, Flags.Case, Ref(bSym).tpe.widen)
                 val nMap = map.updated(bSym, Ref(nBSym))
                 val (nPat1, nMap1) = rebindPatterns(pat1, nMap)
                 (Bind(nBSym,nPat1), nMap1)
@@ -459,6 +488,7 @@ trait ApplyArgRecordScope[F[_], CT, CC<:CpsMonadContext[F]]:
        def isAsync: Boolean = nested.isAsync
        def noOrderDepended = nested.noOrderDepended
        def shouldBeChangedSync = nested.shouldBeChangedSync
+       def isCpsDirect: Boolean = nested.isCpsDirect
        def identArg(existsAsync: Boolean): Term = NamedArg(name, nested.identArg(existsAsync))
        def shift(shiftType: ApplicationShiftType): ApplyArgRecord = copy(nested=nested.shift(shiftType))
        def append(a: CpsTree): CpsTree = nested.append(a)
@@ -490,6 +520,7 @@ trait ApplyArgRecordScope[F[_], CT, CC<:CpsMonadContext[F]]:
     def isAsync: Boolean = cpsTree.isAsync
     def hasShiftedLambda: Boolean = cpsTree.isAsync || optShiftType.isDefined
     def noOrderDepended: Boolean = true
+    def isCpsDirect: Boolean = false
     def shouldBeChangedSync: Boolean = cpsTree.isChanged
     def shift(shiftType: ApplicationShiftType) = copy(optShiftType = Some(shiftType))
     def append(tree: CpsTree): CpsTree = tree
@@ -505,6 +536,7 @@ trait ApplyArgRecordScope[F[_], CT, CC<:CpsMonadContext[F]]:
        def hasShiftedLambda: Boolean = nested.hasShiftedLambda
        def isAsync: Boolean = nested.isAsync
        def noOrderDepended = nested.noOrderDepended
+       def isCpsDirect: Boolean = nested.isCpsDirect
        def shouldBeChangedSync: Boolean = nested.shouldBeChangedSync
        def identArg(existsAsync:Boolean): Term = nested.identArg(existsAsync)
        def shift(shiftType: ApplicationShiftType): ApplyArgRecord = copy(nested=nested.shift(shiftType))
@@ -513,7 +545,7 @@ trait ApplyArgRecordScope[F[_], CT, CC<:CpsMonadContext[F]]:
              if (na eq a)
                 a
              else
-                InlinedCpsTree(tree.origin, tree.bindings, na)
+                InlinedCpsTree(tree.owner, tree.origin, tree.bindings, na)
   }
 
 

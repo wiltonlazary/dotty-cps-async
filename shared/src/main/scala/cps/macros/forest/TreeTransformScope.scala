@@ -17,11 +17,11 @@ trait TreeTransformScope[F[_]:Type,CT:Type, CC<:CpsMonadContext[F]:Type]
                   with LambdaTreeTransform[F, CT, CC]
                   with MatchTreeTransform[F, CT, CC]
                   with AsyncTreeShifter[F,CT, CC]
-                  with RepeatedTreeTransform[F,CT, CC]
                   with InlinedTreeTransform[F,CT, CC]
                   with SelectOuterTreeTransform[F,CT, CC]
                   with BlockTreeTransform[F,CT,CC]
                   with ValDefTreeTransform[F,CT,CC]
+                  with NonLocalReturnsTreeTransform[F,CT,CC]
 {
 
    val cpsCtx: TransformationContext[F,CT, CC]
@@ -94,7 +94,12 @@ trait TreeTransformScope[F[_]:Type,CT:Type, CC<:CpsMonadContext[F]:Type]
    def isInMonad(tpe: qctx.reflect.TypeRepr): Boolean =
       given Type[F] = fType
       tpe.widen.asType match
-        case '[F[r]] => true
+        case '[F[r]] => 
+          // bug in dotty-3.2.1
+          // see #63
+          // TODO: prepare compiler test-case and report
+          tpe.widen <:< qctx.reflect.TypeRepr.of[F[r]]
+          //true
         case _  => false
 
 

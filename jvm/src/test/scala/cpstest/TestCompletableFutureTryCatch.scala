@@ -3,6 +3,7 @@ package cpstest
 import org.junit.{Test,Ignore}
 import org.junit.Assert.*
 
+import scala.annotation.unchecked
 import scala.concurrent.*
 import scala.concurrent.duration.*
 import scala.util.*
@@ -57,9 +58,11 @@ class TestCompletableFutureTryCatch:
     assert(x == 1)
     val r = f.value.get
     assert(r.isFailure)
-    val Failure(ex) = r
-    assert(ex.getMessage().nn.contains("CompletableFuture:simpleTryCatch:1.2"))
-
+    r match
+      case Failure(ex) =>
+        assert(ex.getMessage().nn.contains("CompletableFuture:simpleTryCatch:1.2"))
+      case _ =>
+        assert(false)
   }
 
 
@@ -78,9 +81,11 @@ class TestCompletableFutureTryCatch:
     assert(x == 1)
     val r = f.value.get
     assert(r.isFailure)
-    val Failure(ex) = r
-    assert(ex.getMessage().nn.contains("CompletableFuture:simpleTryFinally:2"))
-
+    r match
+      case Failure(ex) =>
+        assert(ex.getMessage().nn.contains("CompletableFuture:simpleTryFinally:2"))
+      case _ =>
+        assert(false)
   }
 
 
@@ -105,7 +110,12 @@ class TestCompletableFutureTryCatch:
     assert(y == 0)
     val r = f.value.get
     assert(r.isFailure)
-    val Failure(ex) = r
+    r match
+      case Failure(ex) =>
+        //assert(ex.getMessage().nn.contains("CompletableFuture:simpleTryFinally:3.1"))
+      case _ =>
+        assert(false)
+    //val Failure(ex) = r
     //println(ex.getMessage())
     // unchanged: looks like scala and java behavious here is differ.
     //assert(ex.getMessage().contains("CompletableFuture:simpleTryFinally:3.1"))
@@ -117,7 +127,9 @@ class TestCompletableFutureTryCatch:
     var x = 0
     val a = async { 
                try
-                 await(CompletableFuture.completedFuture(1).nn)
+                 //bug in dotty
+                 //await(CompletableFuture.completedFuture(1).nn)
+                 await(CompletableFuture.completedFuture(1))
                  raise(new RuntimeException("CompletableFuture:simpleTryCatch:4.1")) 
                catch
                  case NonFatal(ex) =>
@@ -129,8 +141,11 @@ class TestCompletableFutureTryCatch:
     assert(x == 1)
     val r = f.value.get
     assert(r.isFailure)
-    val Failure(ex) = r
-    assert(ex.getMessage().nn.contains("CompletableFuture:simpleTryCatch:4.2"))
+    r match
+      case Failure(ex) =>
+        assert(ex.getMessage().nn.contains("CompletableFuture:simpleTryCatch:4.2"))
+      case _ =>
+        assert(false)
 
   }
 

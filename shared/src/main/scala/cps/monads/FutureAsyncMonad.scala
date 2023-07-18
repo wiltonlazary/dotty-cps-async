@@ -13,7 +13,7 @@ trait ExecutionContextProvider {
      def executionContext: ExecutionContext
 }
 
-class FutureContext(m: FutureAsyncMonadAPI) extends CpsMonadNoAdoptContext[Future] with ExecutionContextProvider {
+class FutureContext(m: FutureAsyncMonadAPI) extends CpsTryMonadContext[Future] with ExecutionContextProvider {
 
    def monad: FutureAsyncMonadAPI = m
 
@@ -29,7 +29,7 @@ class FutureContext(m: FutureAsyncMonadAPI) extends CpsMonadNoAdoptContext[Futur
 /**
  * Default CpsMonad implementation for `Future`
  **/
-class FutureAsyncMonadAPI(using ExecutionContext) extends CpsSchedulingMonad[Future] with CpsContextMonad[Future, FutureContext] {
+class FutureAsyncMonadAPI(using ExecutionContext) extends CpsSchedulingMonad[Future] with CpsTryContextMonad[Future, FutureContext] {
 
    type F[+T] = Future[T]
 
@@ -133,3 +133,4 @@ given toFutureConversion[F[_], T](using ExecutionContext, CpsSchedulingMonad[F])
 
 
 
+//given [T](using FutureContext): NonLocalReturns.ReturnThrowable[T]

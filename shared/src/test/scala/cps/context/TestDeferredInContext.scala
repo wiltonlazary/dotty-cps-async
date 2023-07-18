@@ -11,7 +11,7 @@ import org.junit.{Test,Ignore}
 import org.junit.Assert.*
 
 
-class DeferredDestructorsContext extends CpsMonadContext[ComputationBound] {
+class DeferredDestructorsContext extends CpsTryMonadContext[ComputationBound] {
 
   // non-reentrable for this example.
   //val  deferred: ConcurrentLinkedDeque[()=>Unit] = new ConcurrentLinkedDeque()
@@ -55,8 +55,8 @@ class DeferredDestructorsContext extends CpsMonadContext[ComputationBound] {
                 m.error(ex)                      
     } 
 
-  // not intercept awaits.  
-  override def adoptAwait[A](fa: ComputationBound[A]):ComputationBound[A] = fa
+  override def monad = summon[CpsMonad[ComputationBound]]  
+
 
 }
 
@@ -64,9 +64,10 @@ object DeferredProvider extends CpsMonadContextProvider[ComputationBound] {
 
    type Context = DeferredDestructorsContext
 
-   def contextualize[T](f: Context => ComputationBound[T] ): ComputationBound[T] =
+
+   def contextualize[T](m: CpsTryMonad[ComputationBound], f: Context => ComputationBound[T] ): ComputationBound[T] =
       val ctx = new DeferredDestructorsContext()
-      ctx.withContext(f(ctx), summon[CpsTryMonad[ComputationBound]])
+      ctx.withContext(f(ctx), m)
 
 }
 

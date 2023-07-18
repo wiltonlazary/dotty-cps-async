@@ -21,7 +21,7 @@ import cps.testconfig.given
 /**
  * ScopedContext - bring structured concurrency primitives for futures.
  **/
-class FutureScopeContext(ec: ExecutionContext, parentScope: Option[FutureScopeContext] = None) extends CpsMonadContext[Future] 
+class FutureScopeContext(m: CpsTryMonad[Future], ec: ExecutionContext, parentScope: Option[FutureScopeContext] = None) extends CpsTryMonadContext[Future]
                                                                                                   with ExecutionContextProvider  
                                                                                                   with Cancellable {
 
@@ -36,7 +36,42 @@ class FutureScopeContext(ec: ExecutionContext, parentScope: Option[FutureScopeCo
   
   def executionContext: ExecutionContext = ec
 
-  override def adoptAwait[A](fa: Future[A]):Future[A] = {
+  override val monad:CpsTryMonad[Future] = new CpsTryMonad[Future] {
+
+    override type Context = FutureScopeContext
+
+    given executionContext: ExecutionContext = ec
+
+    export  m.pure
+
+    override def map[A,B](fa: Future[A])(f: A=>B): Future[B] = {
+      adoptAwait(m.map(fa)(f))
+    }
+
+    override def flatMap[A, B](fa: Future[A])(f: A => Future[B]): Future[B] = {
+      adoptAwait(m.flatMap(fa)(f))
+    }
+
+    export m.error
+
+    override def mapTry[A, B](fa: Future[A])(f: Try[A] => B): Future[B] = {
+      adoptAwait(m.mapTry(fa)(f))
+    }
+
+    override def flatMapTry[A, B](fa: Future[A])(f: Try[A] => Future[B]): Future[B] = {
+      adoptAwait(m.flatMapTry(fa)(f))
+    }
+
+    override def apply[T](op: Context => Future[T]): Future[T] = {
+      FutureScope.spawn_async(using FutureScopeContext.this)(op, ec)
+    }
+
+
+  }
+
+  //override def monad: CpsTryMonad[Future] = m
+  
+  def adoptAwait[A](fa: Future[A]):Future[A] = {
     given ExecutionContext = ec
     stateRef.get match
       case FutureScopeContext.State.Active =>    
@@ -143,7 +178,7 @@ class FutureScopeContext(ec: ExecutionContext, parentScope: Option[FutureScopeCo
     given ExecutionContext = executionContext
     stateRef.get() match
       case FutureScopeContext.State.Active =>
-        val c = new FutureScopeContext(executionContext, Some(this))
+        val c = new FutureScopeContext(m, executionContext, Some(this))
         val p = Promise[A]()
         p.completeWith(c.run(f))
         val childRecord = DelegatedCancellableFuture(p.future,

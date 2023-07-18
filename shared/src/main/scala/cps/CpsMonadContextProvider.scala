@@ -2,7 +2,7 @@ package cps
 
 trait CpsMonadContextProvider[F[_]]:
 
-    type Context <: CpsMonadContext[F]
+    type Context <: CpsTryMonadContext[F]
 
-    def  contextualize[A](fa: Context => F[A]): F[A]
+    def  contextualize[A](m: CpsTryMonad[F], fa: Context => F[A]): F[A]
 

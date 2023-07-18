@@ -23,8 +23,8 @@ object ThrowTransform:
      import cpsCtx._
      val cpsEx = Async.nestTransform(ex, cpsCtx)
 
-     if (cpsCtx.monad.asTerm.tpe <:< TypeRepr.of[CpsTryMonad[F]])
-       val errorMonad = monad.asExprOf[CpsTryMonad[F]]
+     if (cpsCtx.monad.asTerm.tpe <:< TypeRepr.of[CpsThrowMonad[F]])
+       val errorMonad = monad.asExprOf[CpsThrowMonad[F]]
        if (!cpsEx.isAsync)
             // TODO: think, mb leave as is...
             CpsExpr.async[F,T](monad,  '{  ${errorMonad}.error(${ex}) })
@@ -32,5 +32,5 @@ object ThrowTransform:
             CpsExpr.async[F,T](monad,
                 cpsEx.flatMap[T]( '{ (ex:S) => ${errorMonad}.error(ex) } ).transformed )
      else
-       throw MacroError("this monad not support try/catch",patternCode)
+       throw MacroError(s"monad ${monad.show} of type ${monad.asTerm.tpe.widen.show} in context ${TypeRepr.of[C].show} not support try/catch",patternCode)
 

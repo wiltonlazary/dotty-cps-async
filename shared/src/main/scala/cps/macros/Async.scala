@@ -6,14 +6,13 @@
 package cps.macros
 
 import scala.language.implicitConversions
-
-import scala.quoted._
-import scala.compiletime._
+import scala.quoted.*
+import scala.compiletime.*
 import scala.util.control.NonFatal
-
 import cps.*
 import cps.macros.*
 import cps.macros.common.*
+import cps.macros.flags.UseCompilerPlugin
 import cps.macros.forest.*
 import cps.macros.misc.*
 import cps.macros.observatory.*
@@ -23,25 +22,54 @@ object Async {
 
   class InferAsyncArg[F[_],C<:CpsMonadContext[F]](using val am:CpsMonad.Aux[F,C]) {
 
-       transparent inline def apply[T](inline expr: C ?=> T) =
-            //transform[F,T](using am)(expr)
-            //   
-            am.apply(transformContextLambda(expr))
+       transparent inline def apply[T](inline expr: C ?=> T) = ${
+         inferAsyncArgApplyImpl[F, T, C]('am, 'expr)
+       }
+
+            //
+            //am.apply(transformContextLambda(expr))
             //am.apply(x =>
             //   transform[F,T,C](expr,x)
             //)
 
-       
-       transparent inline def in[T](mc: CpsMonadContextProvider[F] )(inline expr: mc.Context ?=> T ): F[T]  = 
-            mc.contextualize(transformContextLambda(expr))
-       
+       transparent inline def in[T](mc: CpsMonadContextProvider[F])(inline expr: mc.Context ?=> T): F[T] =
+            //  TODO: compile-time check instead instance-om.
+            //  Promblem,  that it should be implemented at the top level
+            mc.contextualize(am.asInstanceOf[CpsTryMonad.Aux[F,C]], transformContextLambda(expr))
+
+
   }
 
-  inline def async[F[_]](using am:CpsMonad[F]) =
-          new InferAsyncArg(using am)
-     
+  class InferAsyncArg1[F[_], C<:CpsTryMonadContext[F]](using val am: CpsTryMonad.Aux[F,C]) {
 
-  transparent inline def transformContextLambda[F[_],T,C<:CpsMonadContext[F]](inline expr: C ?=> T)(using m: CpsMonad[F]): C => F[T] =
+      transparent inline def apply[T](inline expr: C ?=> T) =
+            am.apply(transformContextLambda(expr))
+
+  }
+
+  transparent inline def async[F[_]](using am:CpsMonad[F]) =
+          new InferAsyncArg(using am)
+
+  def inferAsyncArgApplyImpl[F[_]:Type, T:Type, C<:CpsMonadContext[F]:Type](am: Expr[CpsMonad.Aux[F,C]], expr: Expr[C ?=> T])(using Quotes): Expr[F[T]] = {
+    import quotes.reflect._
+    val usePlugin = Expr.summon[UseCompilerPlugin.type].isDefined // ||CompilationInfo.XmacroSettings.find(_ == "cps:plugin").isDefined
+    // Problem: XmacroSettings still experimental
+    if (usePlugin) {
+      Apply(
+        TypeApply(
+          Ref(Symbol.requiredMethod("cps.plugin.cpsAsyncApply")),
+          List(Inferred(TypeRepr.of[F]), Inferred(TypeRepr.of[T]), Inferred(TypeRepr.of[C]))
+        ),
+        List(am.asTerm, expr.asTerm)
+      ).asExprOf[F[T]]
+    } else {
+      val fun = transformContextLambdaImpl(expr)
+      '{  ${am}.apply($fun) }
+    }
+
+  }
+
+  transparent inline def transformContextLambda[F[_],T,C<:CpsMonadContext[F]](inline expr: C ?=> T): C => F[T] =
      ${
         Async.transformContextLambdaImpl[F,T,C]('expr)
      } 
@@ -64,7 +92,7 @@ object Async {
           transformMonad[F,T,C](f,dm,c)
        case None =>
           val msg = s"Can't find async monad for ${TypeRepr.of[F].show} (transformImpl)"
-          report.throwError(msg, f)
+          report.errorAndAbort(msg, f)
 
              
   /**
@@ -103,7 +131,7 @@ object Async {
                val cpsRuntimeAwait = optRuntimeAwait.get
                if (dm.asTerm.tpe <:< TypeRepr.of[CpsAsyncMonad[F]]) then
                   val dma = dm.asExprOf[CpsAsyncMonad[F]]
-                  val transformed = loomTransform[F,T,C](f,dma,mc.asExprOf[C],cpsRuntimeAwait, memoization, observatory, flags)
+                  val transformed = loomTransform[F,T,C & CpsTryMonadContext[F]](f,dma,mc.asExprOf[C & CpsTryMonadContext[F]],cpsRuntimeAwait, memoization, observatory, flags)
                   if (dm.asTerm.tpe <:< TypeRepr.of[CpsAsyncEffectMonad[F]]) then
                      '{ ${dm.asExprOf[CpsEffectMonad[F]]}.delay(${transformed}) }
                   else if (dm.asTerm.tpe <:< TypeRepr.of[CpsSchedulingMonad[F]]) then
@@ -111,9 +139,9 @@ object Async {
                   else  
                      '{  ${dm}.lazyPure(${transformed}) }
                else
-                  report.throwError(s"loom enbled but monad  ${dm.show} of type ${dm.asTerm.tpe.widen.show} is not Async, runtimeAwait = ${cpsRuntimeAwait.show}")
+                  report.errorAndAbort(s"loom enbled but monad  ${dm.show} of type ${dm.asTerm.tpe.widen.show} is not Async, runtimeAwait = ${cpsRuntimeAwait.show}")
               } else {
-               val cpsExpr = rootTransform[F,T,C](f,dm,mc,memoization, optRuntimeAwait, flags,observatory,0, None)
+               val cpsExpr = rootTransform[F,T,C](f,dm,mc,memoization, optRuntimeAwait, flags,observatory, 0, None)
                if (DEBUG) {
                  TransformUtil.dummyMapper(cpsExpr.transformed.asTerm, Symbol.spliceOwner)
                }
@@ -153,45 +181,45 @@ object Async {
       case ex: MacroError =>
         if (flags.debugLevel > 0)
            ex.printStackTrace
-        report.throwError(ex.msg, ex.posExpr)
+        report.errorAndAbort(ex.msg, ex.posExpr)
 
 
 
   def adoptFlags[F[_]:Type,T](f: Expr[T], dm: Expr[CpsMonad[F]])(using Quotes): AsyncMacroFlags =
-    import quotes.reflect._
-    /*
-    Expr.summon[AsyncMacroFlags] match
-      case Some(flagsExpr) =>
-        flagsExpr match
-          case Expr(flags) => flags
-          case _  =>
-            throw MacroError(
+      import quotes.reflect._
+      /*
+      Expr.summon[AsyncMacroFlags] match
+         case Some(flagsExpr) =>
+            flagsExpr match
+               case Expr(flags) => flags
+               case _  =>
+                  throw MacroError(
                     s"AsyncMacroFlags ($flagsExpr) is not a compile-time value", flagsExpr )
-      case None =>
-     */
-       import cps.macros.flags.{*, given}
-            val printTree = Expr.summon[PrintTree.type].isDefined
-            val printCode = Expr.summon[PrintCode.type].isDefined
-            val debugLevel = Expr.summon[DebugLevel] match
+         case None =>
+      */
+      import cps.macros.flags.{*, given}
+      val printTree = Expr.summon[PrintTree.type].isDefined
+      val printCode = Expr.summon[PrintCode.type].isDefined
+      val debugLevel = Expr.summon[DebugLevel] match
                  case Some(expr) =>
                    expr match
                       case Expr(v) => v.value
                       case other  =>
                           throw MacroError(s"DebugLevel ${other.show} is not a compile-time value", other)
                  case None => 0
-            val automaticColoringTag = Expr.summon[cps.automaticColoring.AutomaticColoringTag[F]]
-            val automaticColoring = automaticColoringTag.isDefined
-            if (debugLevel > 0)
+      val automaticColoringTag = Expr.summon[cps.automaticColoring.AutomaticColoringTag[F]]
+      val automaticColoring = automaticColoringTag.isDefined
+      if (debugLevel > 0)
                println(s"automaticColoringTag: ${automaticColoringTag.map(_.show)}")
-            val customValueDiscard = Expr.summon[cps.ValueDiscard.CustomTag].isDefined || automaticColoring
-            val warnValueDiscard = Expr.summon[cps.ValueDiscard.WarnTag].isDefined || 
+      val customValueDiscard = Expr.summon[cps.ValueDiscard.CustomTag].isDefined || automaticColoring
+      val warnValueDiscard = Expr.summon[cps.ValueDiscard.WarnTag].isDefined || 
                                      (automaticColoring && 
                                       Expr.summon[cps.automaticColoring.WarnValueDiscard[F]].isDefined )
-            val useLoomAwait = Expr.summon[UseLoomAwait.type].isDefined // || CompilationInfo.XmacroSettings.contains("cps:loom") - experimental
-            //val pos = Position.ofMacroExpansion
-            //println(s"!!!adoptFlags, useLoomAwait = ${useLoomAwait} for ${pos.sourceFile.path}:${pos.startLine}")
-            AsyncMacroFlags(printCode,printTree,debugLevel, true, customValueDiscard, warnValueDiscard, automaticColoring,
-                            useLoomAwait = useLoomAwait)
+      val useLoomAwait = Expr.summon[UseLoomAwait.type].isDefined // || CompilationInfo.XmacroSettings.contains("cps:loom") - experimental
+      //val pos = Position.ofMacroExpansion
+      //println(s"!!!adoptFlags, useLoomAwait = ${useLoomAwait} for ${pos.sourceFile.path}:${pos.startLine}")
+      AsyncMacroFlags(printCode,printTree,debugLevel, true, customValueDiscard, warnValueDiscard, automaticColoring,
+                     useLoomAwait = useLoomAwait)
 
 
   def resolveMemoization[F[_]:Type, T:Type](f: Expr[T], dm: Expr[CpsMonad[F]])(using Quotes): 
@@ -227,8 +255,8 @@ object Async {
                                            using Quotes): CpsExpr[F,T] =
      val tType = summon[Type[T]]
      import quotes.reflect._    
-     val cpsCtx = TransformationContext[F,T,C](f,tType,dm,mc,optMemoization,optRuntimeAwait,
-                                               flags,observatory,nesting,parent)
+     val cpsCtx = TransformationContext[F,T,C](f,tType,/*dm,*/mc,optMemoization,optRuntimeAwait,
+                                               flags,observatory, nesting,parent)
      val retval = f match 
          case '{ if ($cond)  $ifTrue  else $ifFalse } =>
                             IfTransform.run(cpsCtx, cond, ifTrue, ifFalse)
@@ -276,8 +304,6 @@ object Async {
                    ReturnTransform(cpsCtx).run(returnTerm, from)
                 case constTerm@Literal(_)=>  
                    ConstTransform.run(cpsCtx, constTerm)
-                case repeatedTerm@Repeated(elems, tpt) =>  
-                   RepeatedTransform(cpsCtx).run(repeatedTerm)
                 case _ =>
                    println("f:"+f.show)
                    println("fTree:"+fTree)
@@ -291,50 +317,53 @@ object Async {
                               )(using Quotes):CpsExpr[F,S]=
         rootTransform(f,cpsCtx.monad, cpsCtx.monadContext, cpsCtx.memoization,
                       cpsCtx.runtimeAwait,
-                      cpsCtx.flags,cpsCtx.observatory,cpsCtx.nesting+1, Some(cpsCtx))
+                      cpsCtx.flags,cpsCtx.observatory, 
+                      cpsCtx.nesting+1, Some(cpsCtx))
 
 
-  def transformContextLambdaImpl[F[_]:Type, T:Type, C<:CpsMonadContext[F]:Type](cexpr: Expr[C ?=> T])(using Quotes): Expr[C => F[T]] =
-      import quotes.reflect._
+  def transformContextLambdaImpl[F[_]:Type, T:Type, C<:CpsMonadContext[F]:Type](cexpr: Expr[C ?=> T])(using Quotes): Expr[C => F[T]] = {
+    import quotes.reflect._
 
-      def inInlined(t: Term, f: Term => Term): Term =
-         t match
-            case Inlined(call, bindings, body) => Inlined(call, bindings, f(body))
-            case other => other
+    def inInlined(t: Term, f: Term => Term): Term =
+      t match
+        case Inlined(call, bindings, body) => Inlined(call, bindings, f(body))
+        case other => other
 
-      def extractLambda(f:Term): (List[ValDef], Term, Term => Term ) =
-         f match
-            case Inlined(call, bindings, body) =>
-               val inner = extractLambda(body)
-               (inner._1, inner._2, t => Inlined(call, bindings, t) )   
-            case Lambda(params,body) =>
-               params match
-                  case List(vd) => (params, body, identity)
-                  case _ => report.throwError(s"lambda with one argument expected, we have ${params}",cexpr)
-            case Block(Nil,nested@Lambda(params,body)) => extractLambda(nested)
-            case _ =>
-               report.throwError(s"lambda expected, have: ${f}", cexpr)
-      
-      def transformNotInlined(t: Term): Term =
-         val (oldParams, body, nestFun) = extractLambda(t)
-         val oldValDef = oldParams.head
-         val transformed = transformImpl[F,T,C](body.asExprOf[T], Ref(oldValDef.symbol).asExprOf[C])
-         val mt = MethodType(List(oldValDef.name))( _ => List(oldValDef.tpt.tpe), _ => TypeRepr.of[F[T]])
-         val nLambda = Lambda(Symbol.spliceOwner, mt, (owner, params) => {
-            TransformUtil.substituteLambdaParams( oldParams, params, transformed.asTerm, owner ).changeOwner(owner)
-         })
-         nestFun(nLambda)
+    def extractLambda(f: Term): (List[ValDef], Term, Term => Term) =
+      f match
+        case Inlined(call, bindings, body) =>
+          val inner = extractLambda(body)
+          (inner._1, inner._2, t => Inlined(call, bindings, t))
+        case Lambda(params, body) =>
+          params match
+            case List(vd) => (params, body, identity)
+            case _ => report.errorAndAbort(s"lambda with one argument expected, we have ${params}", cexpr)
+        case Block(Nil, nested@Lambda(params, body)) => extractLambda(nested)
+        case _ =>
+          report.errorAndAbort(s"lambda expected, have: ${f}", cexpr)
 
-      val retval = inInlined(cexpr.asTerm, transformNotInlined).asExprOf[C => F[T]]
-      retval
+    def transformNotInlined(t: Term): Term =
+      val (oldParams, body, nestFun) = extractLambda(t)
+      val oldValDef = oldParams.head
+      val transformed = transformImpl[F, T, C](body.changeOwner(Symbol.spliceOwner).asExprOf[T], Ref(oldValDef.symbol).asExprOf[C])
+      val mt = MethodType(List(oldValDef.name))(_ => List(oldValDef.tpt.tpe), _ => TypeRepr.of[F[T]])
+      val nLambda = Lambda(Symbol.spliceOwner, mt, (owner, params) => {
+        TransformUtil.substituteLambdaParams(oldParams, params, transformed.asTerm, owner).changeOwner(owner)
+      })
+      nestFun(nLambda)
+
+    val retval = inInlined(cexpr.asTerm, transformNotInlined).asExprOf[C => F[T]]
+    retval
+  }
 
 
-  def transformContextInstanceMonad[F[_]:Type,T:Type,C<:CpsMonadInstanceContext[F] :Type](f: Expr[T], dm: Expr[C])(using Quotes): Expr[F[T]] = 
+  //TODO: find usage and remove if not used
+  def transformContextInstanceMonad[F[_]:Type,T:Type,C<:CpsTryMonadInstanceContext[F] :Type](f: Expr[T], dm: Expr[C])(using Quotes): Expr[F[T]] =
          '{
             $dm.apply( mc => ${transformMonad(f, dm, 'mc)})
           }
 
-  def loomTransform[F[_]:Type, T:Type, C<:CpsMonadContext[F]:Type](f: Expr[T], 
+  def loomTransform[F[_]:Type, T:Type, C<:CpsTryMonadContext[F]:Type](f: Expr[T],
                                                         dm: Expr[CpsAsyncMonad[F]], 
                                                         ctx: Expr[C], 
                                                         runtimeApi: Expr[CpsRuntimeAwait[F]],
