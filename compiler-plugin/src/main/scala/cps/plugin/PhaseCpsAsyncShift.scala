@@ -22,7 +22,7 @@ class PhaseCpsAsyncShift(selectedNodes: SelectedNodes, shiftedSymbols: ShiftedSy
   // strange -
   override def allowsImplicitSearch = true
   override val runsAfter            = Set(PhaseCps.name)
-  override val runsBefore           = Set(Erasure.name, PhaseCpsAsyncReplace.name)
+  override val runsBefore           = Set(PhaseCpsAsyncReplace.name)
 
   // override def run(using Context): Unit = {
   // TODO:
@@ -87,6 +87,7 @@ class PhaseCpsAsyncShift(selectedNodes: SelectedNodes, shiftedSymbols: ShiftedSy
       tree
     } else {
       // tree
+      println("cpsAsyncShift::transformTemplate: added new methods: " + newMethods.map(_.name).mkString(","))
       cpy.Template(tree)(body = tree.body ++ newMethods)
     }
     // println(s"after CpsAsyncShift, retval: ${retval.show}")

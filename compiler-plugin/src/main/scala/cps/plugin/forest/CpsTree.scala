@@ -30,7 +30,7 @@ import dotty.tools.dotc.ast.tpd
  *    |- BlockBoundsCpsTree
  *    |- SelectTypeApplyTypedCpsTree
  *    |- InlinedCpsTree(can-be-deleted)
- *    |- DefinitionCpsTree
+ *    |- MemberDefCpsTree
  *    |- CallChainSubstCpsTree
  *
  **/
@@ -302,7 +302,7 @@ case class SeqCpsTree(
     last.originType
 
   override def castOriginType(ntpe: Type)(using Context, CpsTopLevelContext): CpsTree =
-    last.castOriginType(ntpe)
+    SeqCpsTree(origin, owner, prevs, last.castOriginType(ntpe))
 
   override def unpure(using Context, CpsTopLevelContext) = {
     if (prevs.isEmpty) then
@@ -313,9 +313,9 @@ case class SeqCpsTree(
           val stats = prevs.map{ t =>
              t.unpure.get.changeOwner(t.owner,owner)
           }.toList
-          Some(Block( stats, last.unpure.get.changeOwner(last.owner,owner) ))
+          Some(Block( stats, last.unpure.get.changeOwner(last.owner,owner) ).withSpan(origin.span))
         case AsyncKind.AsyncLambda(_) =>
-          last.unpure.map(etaExpand)
+          last.unpure.map(etaExpand).map(_.withSpan(origin.span))
         case _ =>
           None
   }
@@ -323,16 +323,16 @@ case class SeqCpsTree(
 
 
   override def transformed(using Context, CpsTopLevelContext): Tree = {
-    if (prevs.length == 0) then
+    if (prevs.isEmpty) then
       last.transformed
     else
       asyncKind match
         case AsyncKind.AsyncLambda(_) =>
-          etaExpand(last.transformed)
+          etaExpand(last.transformed).withSpan(origin.span)
         case _ =>
           val tstats = prevs.map(t => t.unpure.get.changeOwner(t.owner,owner))
           val tlast = last.transformed.changeOwner(last.owner,owner)
-          Block(tstats.toList,tlast)
+          Block(tstats.toList,tlast).withSpan(origin.span)
   }
 
   private def etaExpand(tLast: Tree)(using Context, CpsTopLevelContext): Tree = {
@@ -422,7 +422,7 @@ sealed trait AsyncCpsTree extends CpsTree {
         tctx.cpsMonadRef,
         tctx.cpsMonadContextRef
       )
-    )
+    ).withSpan(origin.span)
     CpsTree.pure(origin,owner,tree)
 
 
@@ -443,7 +443,7 @@ case class AsyncTermCpsTree(
     if (origin.tpe =:= ntpe) then
       this
     else  
-      typed(Typed(origin,TypeTree(ntpe)))
+      typed(Typed(origin,TypeTree(ntpe)).withSpan(origin.span))
   }
 
   override def asyncKind(using Context, CpsTopLevelContext): AsyncKind =
@@ -569,7 +569,7 @@ case class MapCpsTreeArgument(
             val sym = newSymbol(owner, "_unused".toTermName, Flags.EmptyFlags, 
                               mapCpsTree.mapSource.originType.widen, Symbols.NoSymbol)
             ValDef(sym,EmptyTree)
-        TransformUtil.makeLambda(List(param), body.originType.widen, owner, syncBody, body.owner)
+        TransformUtil.makeLambda(List(param), body.originType.widen, owner, syncBody, body.owner).withSpan(body.origin.span)
   }  
   
   def show(using Context): String = {
@@ -664,7 +664,7 @@ case class FlatMapCpsTreeArgument(
       ValDef(sym,EmptyTree)
     }
     val transformedBody = body.transformed(using summon[Context].withOwner(body.owner), summon[CpsTopLevelContext])
-    TransformUtil.makeLambda(List(param),body.transformedType,owner,transformedBody, body.owner)
+    TransformUtil.makeLambda(List(param),body.transformedType,owner,transformedBody, body.owner).withSpan(body.origin.span)
   }
 
   def show(using Context):String =
@@ -985,19 +985,11 @@ case class BlockBoundsCpsTree(internal:CpsTree) extends CpsTree {
 
     override def changeOwner(newOwner: Symbol)(using Context) =
       BlockBoundsCpsTree(internal.changeOwner(newOwner))
-
-    override def select(origin: Select)(using Context, CpsTopLevelContext): CpsTree = {
-      BlockBoundsCpsTree(internal.select(origin))
-    }
-
-    override def typed(origin: Typed)(using Context, CpsTopLevelContext): CpsTree = {
-      BlockBoundsCpsTree(internal.typed(origin))
-    }
-
-    override def typeApply(origin: TypeApply)(using Context, CpsTopLevelContext): CpsTree = {
-      BlockBoundsCpsTree(internal.typeApply(origin))
-    }
-
+  
+    //
+    // note, that select can't be overrided, because ( Select({ statements,  x }, "&&") will create unexpected 
+    //  not-eta expanded tree.
+  
     override def show(using Context):String = {
       s"BlockBoundsCpsTree(${internal.show})"
     }  
